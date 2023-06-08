@@ -46,6 +46,7 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <errno.h>
+#include <openssl/bio.h>
 #if defined(HAVE_STRNVIS) && defined(HAVE_VIS_H) && !defined(BROKEN_STRNVIS)
 # include <vis.h>
 #endif
@@ -497,4 +498,26 @@ sshlogdirect(LogLevel level, int forced, const char *fmt, ...)
 	va_start(args, fmt);
 	do_log(level, forced, NULL, fmt, args);
 	va_end(args);
+}
+
+static void
+debug_log_multiline(const char *s, long l)
+{
+	long i, j;
+	const char *nl;
+
+	i = 0;
+	while (i < l) {
+		nl = memchr(s + i, '\n', l - i);
+		if (nl == NULL) {
+			j = l;
+		} else {
+			j = nl - s;
+		}
+
+		if (i != j) {
+			debug("%.*s", (int)(j - i), s + i);
+			i = j + 1;
+		}
+	}
 }

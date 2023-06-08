@@ -124,9 +124,6 @@
  * Prime testing defines
  */
 
-/* Minimum number of primality tests to perform */
-#define TRIAL_MINIMUM	(4)
-
 /*
  * Sieving data (XXX - move to struct)
  */
@@ -143,7 +140,7 @@ static u_int32_t largebits, largememory;	/* megabytes */
 static BIGNUM *largebase;
 
 int gen_candidates(FILE *, u_int32_t, u_int32_t, BIGNUM *);
-int prime_test(FILE *, FILE *, u_int32_t, u_int32_t, char *, unsigned long,
+int prime_test(FILE *, FILE *, u_int32_t, char *, unsigned long,
     unsigned long);
 
 /*
@@ -574,7 +571,7 @@ print_progress(unsigned long start_lineno, unsigned long current_lineno,
  * The result is a list of so-call "safe" primes
  */
 int
-prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
+prime_test(FILE *in, FILE *out, u_int32_t generator_wanted,
     char *checkpoint_file, unsigned long start_lineno, unsigned long num_lines)
 {
 	BIGNUM *q, *p, *a;
@@ -584,11 +581,6 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 	unsigned long last_processed = 0, end_lineno;
 	time_t time_start, time_stop;
 	int res, is_prime;
-
-	if (trials < TRIAL_MINIMUM) {
-		error("Minimum primality trials is %d", TRIAL_MINIMUM);
-		return (-1);
-	}
 
 	if (num_lines == 0)
 		end_lineno = count_lines(in);
@@ -602,8 +594,8 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 	if ((q = BN_new()) == NULL)
 		fatal("BN_new failed");
 
-	debug2("%.24s Final %u Miller-Rabin trials (%x generator)",
-	    ctime(&time_start), trials, generator_wanted);
+	debug2("%.24s Final Miller-Rabin trials (%x generator)",
+	    ctime(&time_start), generator_wanted);
 
 	if (checkpoint_file != NULL)
 		last_processed = read_checkpoint(checkpoint_file);
@@ -704,10 +696,12 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 			continue;
 		}
 
+#if 0 /* TODO */
 		if (in_tests & MODULI_TESTS_MILLER_RABIN)
 			in_tries += trials;
 		else
 			in_tries = trials;
+#endif /* TODO */
 
 		/*
 		 * guess unknown generator
@@ -743,42 +737,18 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 
 		count_possible++;
 
-		/*
-		 * The (1/4)^N performance bound on Miller-Rabin is
-		 * extremely pessimistic, so don't spend a lot of time
-		 * really verifying that q is prime until after we know
-		 * that p is also prime. A single pass will weed out the
-		 * vast majority of composite q's.
-		 */
-		is_prime = BN_is_prime_ex(q, 1, NULL, NULL);
+		is_prime = BN_check_prime(p, NULL, NULL);
 		if (is_prime < 0)
-			fatal("BN_is_prime_ex failed");
-		if (is_prime == 0) {
-			debug("%10u: q failed first possible prime test",
-			    count_in);
-			continue;
-		}
-
-		/*
-		 * q is possibly prime, so go ahead and really make sure
-		 * that p is prime. If it is, then we can go back and do
-		 * the same for q. If p is composite, chances are that
-		 * will show up on the first Rabin-Miller iteration so it
-		 * doesn't hurt to specify a high iteration count.
-		 */
-		is_prime = BN_is_prime_ex(p, trials, NULL, NULL);
-		if (is_prime < 0)
-			fatal("BN_is_prime_ex failed");
+			fatal("BN_check_prime failed");
 		if (is_prime == 0) {
 			debug("%10u: p is not prime", count_in);
 			continue;
 		}
 		debug("%10u: p is almost certainly prime", count_in);
 
-		/* recheck q more rigorously */
-		is_prime = BN_is_prime_ex(q, trials - 1, NULL, NULL);
+		is_prime = BN_check_prime(q, NULL, NULL);
 		if (is_prime < 0)
-			fatal("BN_is_prime_ex failed");
+			fatal("BN_check_prime failed");
 		if (is_prime == 0) {
 			debug("%10u: q is not prime", count_in);
 			continue;

@@ -45,6 +45,12 @@
 
 #include "openbsd-compat/openssl-compat.h"
 
+struct dhgroup {
+	int size;
+	BIGNUM *g;
+	BIGNUM *p;
+};
+
 static const char *moduli_filename;
 
 void dh_set_moduli_file(const char *filename)
@@ -57,182 +63,470 @@ static const char * get_moduli_filename(void)
 	return moduli_filename ? moduli_filename : _PATH_DH_MODULI;
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+
+#include <openssl/core_names.h>
+#include <openssl/err.h>
+#include <openssl/param_build.h>
+
+static void
+error_libcrypto(const char *name)
+{
+	BIO *bio = NULL;
+	char *p = NULL;
+	long l;
+
+	bio = BIO_new(BIO_s_mem());
+	if (bio != NULL) {
+		ERR_print_errors(bio);
+		l = BIO_get_mem_data(bio, &p);
+		error("%s: %.*s", name, (int)l, p);
+		BIO_free(bio);
+	}
+}
+
+static SSH_DH_KEY *
+dh_new_group_from_prime(int pbits, const BIGNUM *p, unsigned int g)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	SSH_DH_KEY *dh = NULL;
+	SSH_DH_KEY *ret = NULL;
+	OSSL_PARAM_BLD *bld = NULL;
+	OSSL_PARAM *param = NULL;
+
+	if ((dh = calloc(1, sizeof *dh)) == NULL) {
+		goto out;
+	}
+
+	if ((bld = OSSL_PARAM_BLD_new()) == NULL) {
+		goto out;
+	}
+
+	if ((ctx = EVP_PKEY_CTX_new_from_name(NULL, "DH", NULL)) == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata_init(ctx) != 1) {
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_FFC_TYPE, "fips186_2", 0) != 1 ||
+	    OSSL_PARAM_BLD_push_int(bld, OSSL_PKEY_PARAM_FFC_PBITS, pbits) != 1 ||
+	    OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_FFC_P, p) != 1 ||
+	    OSSL_PARAM_BLD_push_uint(bld, OSSL_PKEY_PARAM_FFC_G, g) != 1) {
+		goto out;
+	}
+
+	if ((param = OSSL_PARAM_BLD_to_param(bld)) == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata(ctx, &dh->params, EVP_PKEY_KEY_PARAMETERS, param) != 1) {
+		goto out;
+	}
+
+	ret = dh;
+	dh = NULL;
+
+out:
+	OSSL_PARAM_free(param);
+	OSSL_PARAM_BLD_free(bld);
+	dh_free(dh);
+	EVP_PKEY_CTX_free(ctx);
+	return ret;
+}
+
+static SSH_DH_KEY *
+dh_new_group_from_name(const char *name)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	SSH_DH_KEY *dh = NULL;
+	SSH_DH_KEY *ret = NULL;
+
+	if ((dh = calloc(1, sizeof *dh)) == NULL) {
+		goto out;
+	}
+
+	if ((ctx = EVP_PKEY_CTX_new_from_name(NULL, "DH", NULL)) == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_paramgen_init(ctx) != 1 ||
+	    EVP_PKEY_CTX_set_group_name(ctx, name) != 1 ||
+	    EVP_PKEY_paramgen(ctx, &dh->params) != 1) {
+		goto out;
+	}
+
+	ret = dh;
+	dh = NULL;
+
+out:
+	dh_free(dh);
+	EVP_PKEY_CTX_free(ctx);
+	return ret;
+}
+
 static int
-parse_prime(int linenum, char *line, struct dhgroup *dhg)
+dh_pub_is_valid(const SSH_DH_KEY *dh, const BIGNUM *pub_key)
 {
-	char *cp, *arg;
-	char *strsize, *gen, *prime;
-	const char *errstr = NULL;
-	long long n;
+	int i;
+	int n = BN_num_bits(pub_key);
+	int bits_set = 0;
+	BIGNUM *tmp = NULL;
+	BIGNUM *dh_p = NULL;
+	int r = 0;
 
-	dhg->p = dhg->g = NULL;
-	cp = line;
-	if ((arg = strdelim(&cp)) == NULL)
-		return 0;
-	/* Ignore leading whitespace */
-	if (*arg == '\0')
-		arg = strdelim(&cp);
-	if (!arg || !*arg || *arg == '#')
-		return 0;
-
-	/* time */
-	if (cp == NULL || *arg == '\0')
-		goto truncated;
-	arg = strsep(&cp, " "); /* type */
-	if (cp == NULL || *arg == '\0')
-		goto truncated;
-	/* Ensure this is a safe prime */
-	n = strtonum(arg, 0, 5, &errstr);
-	if (errstr != NULL || n != MODULI_TYPE_SAFE) {
-		error("moduli:%d: type is not %d", linenum, MODULI_TYPE_SAFE);
-		goto fail;
-	}
-	arg = strsep(&cp, " "); /* tests */
-	if (cp == NULL || *arg == '\0')
-		goto truncated;
-	/* Ensure prime has been tested and is not composite */
-	n = strtonum(arg, 0, 0x1f, &errstr);
-	if (errstr != NULL ||
-	    (n & MODULI_TESTS_COMPOSITE) || !(n & ~MODULI_TESTS_COMPOSITE)) {
-		error("moduli:%d: invalid moduli tests flag", linenum);
-		goto fail;
-	}
-	arg = strsep(&cp, " "); /* tries */
-	if (cp == NULL || *arg == '\0')
-		goto truncated;
-	n = strtonum(arg, 0, 1<<30, &errstr);
-	if (errstr != NULL || n == 0) {
-		error("moduli:%d: invalid primality trial count", linenum);
-		goto fail;
-	}
-	strsize = strsep(&cp, " "); /* size */
-	if (cp == NULL || *strsize == '\0' ||
-	    (dhg->size = (int)strtonum(strsize, 0, 64*1024, &errstr)) == 0 ||
-	    errstr) {
-		error("moduli:%d: invalid prime length", linenum);
-		goto fail;
-	}
-	/* The whole group is one bit larger */
-	dhg->size++;
-	gen = strsep(&cp, " "); /* gen */
-	if (cp == NULL || *gen == '\0')
-		goto truncated;
-	prime = strsep(&cp, " "); /* prime */
-	if (cp != NULL || *prime == '\0') {
- truncated:
-		error("moduli:%d: truncated", linenum);
-		goto fail;
+	if (ssh_dh_key_get_pg(dh, &dh_p, NULL) != 0) {
+		error_f("dh_get_p failed");
+		goto out;
 	}
 
-	if ((dhg->g = BN_new()) == NULL ||
-	    (dhg->p = BN_new()) == NULL) {
-		error("parse_prime: BN_new failed");
-		goto fail;
+	if (BN_is_negative(pub_key)) {
+		logit("invalid public DH value: negative");
+		goto out;
 	}
-	if (BN_hex2bn(&dhg->g, gen) == 0) {
-		error("moduli:%d: could not parse generator value", linenum);
-		goto fail;
-	}
-	if (BN_hex2bn(&dhg->p, prime) == 0) {
-		error("moduli:%d: could not parse prime value", linenum);
-		goto fail;
-	}
-	if (BN_num_bits(dhg->p) != dhg->size) {
-		error("moduli:%d: prime has wrong size: actual %d listed %d",
-		    linenum, BN_num_bits(dhg->p), dhg->size - 1);
-		goto fail;
-	}
-	if (BN_cmp(dhg->g, BN_value_one()) <= 0) {
-		error("moduli:%d: generator is invalid", linenum);
-		goto fail;
-	}
-	return 1;
 
- fail:
-	BN_clear_free(dhg->g);
-	BN_clear_free(dhg->p);
-	dhg->g = dhg->p = NULL;
-	return 0;
+	if (BN_cmp(pub_key, BN_value_one()) != 1) {	/* pub_exp <= 1 */
+		logit("invalid public DH value: <= 1");
+		goto out;
+	}
+
+	if ((tmp = BN_new()) == NULL) {
+		error_f("BN_new failed");
+		goto out;
+	}
+
+	if (!BN_sub(tmp, dh_p, BN_value_one()) ||
+	    BN_cmp(pub_key, tmp) != -1) {		/* pub_exp > p-2 */
+		logit("invalid public DH value: >= p-1");
+		goto out;
+	}
+
+	for (i = 0; i <= n; i++)
+		if (BN_is_bit_set(pub_key, i))
+			bits_set++;
+	debug2("bits set: %d/%d", bits_set, BN_num_bits(dh_p));
+
+	/*
+	 * if g==2 and bits_set==1 then computing log_g(dh_pub) is trivial
+	 */
+	if (bits_set < 4) {
+		logit("invalid public DH value (%d/%d)",
+		    bits_set, BN_num_bits(dh_p));
+		goto out;
+	}
+
+	r = 1;
+
+out:
+	BN_clear_free(dh_p);
+	BN_clear_free(tmp);
+	return r;
 }
 
-DH *
-choose_dh(int min, int wantbits, int max)
+/* Select fallback group used by DH-GEX if moduli file cannot be read. */
+SSH_DH_KEY *
+dh_new_group_fallback(int max)
 {
-	FILE *f;
-	char *line = NULL;
-	size_t linesize = 0;
-	int best, bestcount, which, linenum;
-	struct dhgroup dhg;
-
-	if ((f = fopen(get_moduli_filename(), "r")) == NULL) {
-		logit("WARNING: could not open %s (%s), using fixed modulus",
-		    get_moduli_filename(), strerror(errno));
-		return (dh_new_group_fallback(max));
+	debug3_f("requested max size %d", max);
+	if (max < 3072) {
+		debug3("using 2k bit group 14");
+		return dh_new_group14();
+	} else if (max < 6144) {
+		debug3("using 4k bit group 16");
+		return dh_new_group16();
 	}
-
-	linenum = 0;
-	best = bestcount = 0;
-	while (getline(&line, &linesize, f) != -1) {
-		linenum++;
-		if (!parse_prime(linenum, line, &dhg))
-			continue;
-		BN_clear_free(dhg.g);
-		BN_clear_free(dhg.p);
-
-		if (dhg.size > max || dhg.size < min)
-			continue;
-
-		if ((dhg.size > wantbits && dhg.size < best) ||
-		    (dhg.size > best && best < wantbits)) {
-			best = dhg.size;
-			bestcount = 0;
-		}
-		if (dhg.size == best)
-			bestcount++;
-	}
-	free(line);
-	line = NULL;
-	linesize = 0;
-	rewind(f);
-
-	if (bestcount == 0) {
-		fclose(f);
-		logit("WARNING: no suitable primes in %s",
-		    get_moduli_filename());
-		return (dh_new_group_fallback(max));
-	}
-	which = arc4random_uniform(bestcount);
-
-	linenum = 0;
-	bestcount = 0;
-	while (getline(&line, &linesize, f) != -1) {
-		linenum++;
-		if (!parse_prime(linenum, line, &dhg))
-			continue;
-		if ((dhg.size > max || dhg.size < min) ||
-		    dhg.size != best ||
-		    bestcount++ != which) {
-			BN_clear_free(dhg.g);
-			BN_clear_free(dhg.p);
-			continue;
-		}
-		break;
-	}
-	free(line);
-	line = NULL;
-	fclose(f);
-	if (bestcount != which + 1) {
-		logit("WARNING: selected prime disappeared in %s, giving up",
-		    get_moduli_filename());
-		return (dh_new_group_fallback(max));
-	}
-
-	return (dh_new_group(dhg.g, dhg.p));
+	debug3("using 8k bit group 18");
+	return dh_new_group18();
 }
+
+/*
+ * This just returns the group, we still need to generate the exchange
+ * value.
+ */
+// TODO: remove
+SSH_DH_KEY *
+dh_new_group(BIGNUM *gen, BIGNUM *modulus)
+{
+	OSSL_PARAM_BLD *bld = NULL;
+	OSSL_PARAM *params = NULL;
+	EVP_PKEY_CTX *ctx = NULL;
+	SSH_DH_KEY *dh = NULL;
+	SSH_DH_KEY *ret = NULL;
+
+	if ((bld = OSSL_PARAM_BLD_new()) == NULL ||
+	    OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_FFC_P, modulus) != 1 ||
+	    OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_FFC_G, gen) != 1 ||
+	    (params = OSSL_PARAM_BLD_to_param(bld)) == NULL
+	) {
+		error("%s failed", "OSSL_PARAM_BLD");
+		goto out;
+	}
+
+	dh = calloc(1, sizeof *dh);
+	if (dh == NULL) {
+		goto out;
+	}
+
+	ctx = EVP_PKEY_CTX_new_from_name(NULL, "DH", NULL);
+	if (ctx == NULL) {
+		error("%s failed", "EVP_PKEY_CTX_new_from_name");
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata_init(ctx) != 1) {
+		error("%s failed", "EVP_PKEY_fromdata_init");
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata(ctx, &dh->params, EVP_PKEY_KEY_PARAMETERS, params) != 1) {
+		error("%s failed", "EVP_PKEY_fromdata");
+		goto out;
+	}
+
+	ret = dh;
+	dh = NULL;
+
+out:
+	EVP_PKEY_CTX_free(ctx);
+	OSSL_PARAM_free(params);
+	dh_free(dh);
+	OSSL_PARAM_BLD_free(bld);
+	return ret;
+}
+
+SSH_DH_KEY *
+dh_new_group1(void)
+{
+	SSH_DH_KEY *dh = NULL;
+	BIGNUM *bn_p = NULL;
+
+	bn_p = BN_get_rfc2409_prime_1024(NULL);
+	if (bn_p != NULL) {
+		dh = dh_new_group_from_prime(1024, bn_p, 2);
+		BN_free(bn_p);
+	}
+
+	return dh;
+}
+
+SSH_DH_KEY *
+dh_new_group14(void)
+{
+	return dh_new_group_from_name(SN_modp_2048);
+}
+
+SSH_DH_KEY *
+dh_new_group16(void)
+{
+	return dh_new_group_from_name(SN_modp_4096);
+}
+
+SSH_DH_KEY *
+dh_new_group18(void)
+{
+	return dh_new_group_from_name(SN_modp_8192);
+}
+
+static BIGNUM *
+dh_get_pub_key(SSH_DH_KEY *dh)
+{
+	BIGNUM *pub_key = NULL;
+	EVP_PKEY_get_bn_param(dh->pkey/*or param?*/, OSSL_PKEY_PARAM_PUB_KEY, &pub_key);
+	return pub_key;
+}
+
+int
+dh_gen_key(SSH_DH_KEY *dh, int need)
+{
+	int r = SSH_ERR_INTERNAL_ERROR;
+	EVP_PKEY_CTX *ctx = NULL;
+	int pbits;
+	OSSL_PARAM_BLD *bld = NULL;
+	OSSL_PARAM *param = NULL;
+	BIGNUM *pub_key = NULL;
+
+	EVP_PKEY_free(dh->pkey);
+	dh->pkey = NULL;
+
+	ctx = EVP_PKEY_CTX_new_from_pkey(NULL, dh->params, NULL);
+	if (ctx == NULL) {
+		error("%s failed", "EVP_PKEY_CTX_new_from_pkey");
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (need < 0 ||
+	    (pbits = EVP_PKEY_get_bits(dh->params)) <= 0 ||
+	    need > INT_MAX / 2 || 2 * need > pbits) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	need = MAXIMUM(need, 256);
+
+	/*
+	 * Pollard Rho, Big step/Little Step attacks are O(sqrt(n)),
+	 * so double requested need here.
+	 */
+	pbits = MINIMUM(need * 2, pbits - 1);
+	if (EVP_PKEY_keygen_init(ctx) != 1 ||
+	    (bld = OSSL_PARAM_BLD_new()) == NULL ||
+	    // TODO: is this needed?
+	    OSSL_PARAM_BLD_push_int(bld, OSSL_PKEY_PARAM_FFC_PBITS, pbits) != 1 ||
+	    (param = OSSL_PARAM_BLD_to_param(bld)) == NULL ||
+	    EVP_PKEY_CTX_set_params(ctx, param) != 1 ||
+	    EVP_PKEY_keygen(ctx, &dh->pkey) != 1
+	) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	pub_key = dh_get_pub_key(dh);
+	dh_pub_is_valid(dh, pub_key);
+	// TODO: return SSH_ERR_INVALID_FORMAT on failure
+
+	r = 0;
+
+out:
+	BN_free(pub_key);
+	OSSL_PARAM_free(param);
+	OSSL_PARAM_BLD_free(bld);
+	EVP_PKEY_CTX_free(ctx);
+	return r;
+}
+
+static EVP_PKEY *
+dh_pub_evp_pkey_from_bn(SSH_DH_KEY *dh, BIGNUM *pub)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	EVP_PKEY *pkey = NULL;
+	EVP_PKEY *ret = NULL;
+	OSSL_PARAM_BLD *bld = NULL;
+	OSSL_PARAM *param = NULL;
+
+	ctx = EVP_PKEY_CTX_new_from_pkey(NULL, dh->pkey/*or params?*/, NULL);
+	if (ctx == NULL) {
+		error_f("%s failed", "EVP_PKEY_CTX_new_from_pkey");
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata_init(ctx) != 1) {
+		error_f("%s failed", "EVP_PKEY_fromdata_init");
+		goto out;
+	}
+
+	bld = OSSL_PARAM_BLD_new();
+	if (bld == NULL) {
+		error_f("%s failed", "OSSL_PARAM_BLD_new");
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_PUB_KEY, pub) != 1) {
+		error_f("%s failed", "OSSL_PARAM_BLD_push_BN");
+		goto out;
+	}
+
+	param = OSSL_PARAM_BLD_to_param(bld);
+	if (param == NULL) {
+		error_f("%s failed", "OSSL_PARAM_BLD_to_param");
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_PUBLIC_KEY, param) != 1) {
+		error_f("%s failed", "EVP_PKEY_fromdata");
+		goto out;
+	}
+
+	if (EVP_PKEY_copy_parameters(pkey, dh->params) != 1) {
+		error_f("%s failed", "EVP_PKEY_copy_parameters");
+		goto out;
+	}
+
+	ret = pkey;
+	pkey = NULL;
+
+out:
+	OSSL_PARAM_BLD_free(bld);
+	OSSL_PARAM_free(param);
+	EVP_PKEY_CTX_free(ctx);
+	EVP_PKEY_free(pkey);
+	return ret;
+}
+
+int dh_compute_key(SSH_DH_KEY *dh, BIGNUM *dh_pub, BIGNUM **shared_secret)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	EVP_PKEY *peer = NULL;
+	size_t keylen = 0;
+	unsigned char *key = NULL;
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+
+	dh_pub_is_valid(dh, dh_pub);
+	// TODO: check return value
+
+	peer = dh_pub_evp_pkey_from_bn(dh, dh_pub);
+	if (peer == NULL) {
+		goto out;
+	}
+
+	ctx = EVP_PKEY_CTX_new_from_pkey(NULL, dh->pkey, NULL);
+	if (ctx == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_derive_init(ctx) != 1) {
+		goto out;
+	}
+
+	if (EVP_PKEY_derive_set_peer(ctx, peer) != 1) {
+		error_libcrypto("EVP_PKEY_derive_set_peer");
+		goto out;
+	}
+
+	if (EVP_PKEY_derive(ctx, NULL, &keylen) != 1) {
+		goto out;
+	}
+
+	key = malloc(keylen);
+	if (key == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (EVP_PKEY_derive(ctx, key, &keylen) != 1) {
+		goto out;
+	}
+
+	*shared_secret = BN_bin2bn(key, keylen, NULL);
+	if (*shared_secret == NULL) {
+		goto out;
+	}
+
+	r = 0;
+
+out:
+	free(key);
+	EVP_PKEY_CTX_free(ctx);
+	EVP_PKEY_free(peer);
+	return r;
+}
+
+void
+dh_free(SSH_DH_KEY *dh)
+{
+	if (dh != NULL) {
+		EVP_PKEY_free(dh->pkey);
+		EVP_PKEY_free(dh->params);
+		free(dh);
+	}
+}
+
+#else
 
 /* diffie-hellman-groupN-sha1 */
 
-int
+static int
 dh_pub_is_valid(const DH *dh, const BIGNUM *dh_pub)
 {
 	int i;
@@ -278,6 +572,25 @@ dh_pub_is_valid(const DH *dh, const BIGNUM *dh_pub)
 		return 0;
 	}
 	return 1;
+}
+
+int dh_compute_key(SSH_DH_KEY *dh, BIGNUM *dh_pub, BIGNUM **shared_secret)
+{
+	if (!dh_pub_is_valid(dh, dh_pub)) {
+		r = SSH_ERR_MESSAGE_INCOMPLETE;
+		goto out;
+	}
+	klen = DH_size(dh);
+	if ((kbuf = malloc(klen)) == NULL ||
+	    (shared_secret = BN_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((kout = DH_compute_key(kbuf, dh_pub, dh)) < 0 ||
+	    BN_bin2bn(kbuf, kout, shared_secret) == NULL) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
 }
 
 int
@@ -483,6 +796,201 @@ dh_new_group_fallback(int max)
 	return dh_new_group18();
 }
 
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
+
+
+static int
+parse_prime(int linenum, char *line, struct dhgroup *dhg)
+{
+	char *cp, *arg;
+	char *strsize, *gen, *prime;
+	const char *errstr = NULL;
+	long long n;
+
+	dhg->p = dhg->g = NULL;
+	cp = line;
+	if ((arg = strdelim(&cp)) == NULL)
+		return 0;
+	/* Ignore leading whitespace */
+	if (*arg == '\0')
+		arg = strdelim(&cp);
+	if (!arg || !*arg || *arg == '#')
+		return 0;
+
+	/* time */
+	if (cp == NULL || *arg == '\0')
+		goto truncated;
+	arg = strsep(&cp, " "); /* type */
+	if (cp == NULL || *arg == '\0')
+		goto truncated;
+	/* Ensure this is a safe prime */
+	n = strtonum(arg, 0, 5, &errstr);
+	if (errstr != NULL || n != MODULI_TYPE_SAFE) {
+		error("moduli:%d: type is not %d", linenum, MODULI_TYPE_SAFE);
+		goto fail;
+	}
+	arg = strsep(&cp, " "); /* tests */
+	if (cp == NULL || *arg == '\0')
+		goto truncated;
+	/* Ensure prime has been tested and is not composite */
+	n = strtonum(arg, 0, 0x1f, &errstr);
+	if (errstr != NULL ||
+	    (n & MODULI_TESTS_COMPOSITE) || !(n & ~MODULI_TESTS_COMPOSITE)) {
+		error("moduli:%d: invalid moduli tests flag", linenum);
+		goto fail;
+	}
+	arg = strsep(&cp, " "); /* tries */
+	if (cp == NULL || *arg == '\0')
+		goto truncated;
+	n = strtonum(arg, 0, 1<<30, &errstr);
+	if (errstr != NULL || n == 0) {
+		error("moduli:%d: invalid primality trial count", linenum);
+		goto fail;
+	}
+	strsize = strsep(&cp, " "); /* size */
+	if (cp == NULL || *strsize == '\0' ||
+	    (dhg->size = (int)strtonum(strsize, 0, 64*1024, &errstr)) == 0 ||
+	    errstr) {
+		error("moduli:%d: invalid prime length", linenum);
+		goto fail;
+	}
+	/* The whole group is one bit larger */
+	dhg->size++;
+	gen = strsep(&cp, " "); /* gen */
+	if (cp == NULL || *gen == '\0')
+		goto truncated;
+	prime = strsep(&cp, " "); /* prime */
+	if (cp != NULL || *prime == '\0') {
+ truncated:
+		error("moduli:%d: truncated", linenum);
+		goto fail;
+	}
+
+	if ((dhg->g = BN_new()) == NULL ||
+	    (dhg->p = BN_new()) == NULL) {
+		error("parse_prime: BN_new failed");
+		goto fail;
+	}
+	if (BN_hex2bn(&dhg->g, gen) == 0) {
+		error("moduli:%d: could not parse generator value", linenum);
+		goto fail;
+	}
+	if (BN_hex2bn(&dhg->p, prime) == 0) {
+		error("moduli:%d: could not parse prime value", linenum);
+		goto fail;
+	}
+	if (BN_num_bits(dhg->p) != dhg->size) {
+		error("moduli:%d: prime has wrong size: actual %d listed %d",
+		    linenum, BN_num_bits(dhg->p), dhg->size - 1);
+		goto fail;
+	}
+	if (BN_cmp(dhg->g, BN_value_one()) <= 0) {
+		error("moduli:%d: generator is invalid", linenum);
+		goto fail;
+	}
+	return 1;
+
+ fail:
+	BN_clear_free(dhg->g);
+	BN_clear_free(dhg->p);
+	dhg->g = dhg->p = NULL;
+	return 0;
+}
+
+static int choose_dhgroup(int min, int wantbits, int max, struct dhgroup *dhg)
+{
+	FILE *f;
+	char *line = NULL;
+	size_t linesize = 0;
+	int best, bestcount, which, linenum;
+
+	if ((f = fopen(get_moduli_filename(), "r")) == NULL) {
+		logit("WARNING: could not open %s (%s), using fixed modulus",
+		    get_moduli_filename(), strerror(errno));
+		return -1;
+	}
+
+	linenum = 0;
+	best = bestcount = 0;
+	while (getline(&line, &linesize, f) != -1) {
+		linenum++;
+		if (!parse_prime(linenum, line, dhg))
+			continue;
+
+		BN_clear_free(dhg->g);
+		BN_clear_free(dhg->p);
+
+		if (dhg->size > max || dhg->size < min)
+			continue;
+
+		if ((dhg->size > wantbits && dhg->size < best) ||
+		    (dhg->size > best && best < wantbits)) {
+			best = dhg->size;
+			bestcount = 0;
+		}
+
+		if (dhg->size == best)
+			bestcount++;
+	}
+
+	free(line);
+	line = NULL;
+	linesize = 0;
+	rewind(f);
+
+	if (bestcount == 0) {
+		fclose(f);
+		logit("WARNING: no suitable primes in %s",
+		    get_moduli_filename());
+		return -1;
+	}
+
+	which = arc4random_uniform(bestcount);
+
+	linenum = 0;
+	bestcount = 0;
+	while (getline(&line, &linesize, f) != -1) {
+		linenum++;
+		if (!parse_prime(linenum, line, dhg))
+			continue;
+		if ((dhg->size > max || dhg->size < min) ||
+		    dhg->size != best ||
+		    bestcount++ != which) {
+			BN_clear_free(dhg->g);
+			BN_clear_free(dhg->p);
+			continue;
+		}
+		break;
+	}
+
+	free(line);
+	line = NULL;
+	fclose(f);
+
+	if (bestcount != which + 1) {
+		logit("WARNING: selected prime disappeared in %s, giving up",
+		    get_moduli_filename());
+		return -1;
+	}
+
+	return 0;
+}
+
+SSH_DH_KEY *
+choose_dh(int min, int wantbits, int max)
+{
+	struct dhgroup dhg;
+	int r;
+
+	memset(&dhg, 0, sizeof dhg);
+	r = choose_dhgroup(min, wantbits, max, &dhg);
+	if (r != 0) {
+		return dh_new_group_fallback(max);
+	}
+
+	return dh_new_group(dhg.g, dhg.p);
+}
+
 /*
  * Estimates the group order for a Diffie-Hellman group that has an
  * attack complexity approximately the same as O(2**bits).
@@ -500,6 +1008,62 @@ dh_estimate(int bits)
 	if (bits <= 192)
 		return 7680;
 	return 8192;
+}
+
+int
+ssh_dh_key_get_pg(const SSH_DH_KEY *dh, BIGNUM **pp, BIGNUM **gp)
+{
+	BIGNUM *dh_p = NULL;
+	BIGNUM *dh_g = NULL;
+	int r = 0;
+
+	if (pp != NULL) {
+		if (EVP_PKEY_get_bn_param(dh->params, OSSL_PKEY_PARAM_FFC_P, &dh_p) != 1) {
+			r = SSH_ERR_LIBCRYPTO_ERROR;
+		}
+	}
+
+	if (gp != NULL) {
+		if (EVP_PKEY_get_bn_param(dh->params, OSSL_PKEY_PARAM_FFC_G, &dh_g) != 1) {
+			r = SSH_ERR_LIBCRYPTO_ERROR;
+		}
+	}
+
+	if (r == 0) {
+		if (pp != NULL) {
+			*pp = dh_p;
+			dh_p = NULL;
+		}
+
+		if (gp != NULL) {
+			*gp = dh_g;
+			dh_g = NULL;
+		}
+	}
+
+	BN_clear_free(dh_p);
+	BN_clear_free(dh_g);
+
+	return r;
+}
+
+int
+ssh_dh_key_get_pub(const SSH_DH_KEY *dh, BIGNUM **pub_key)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	if (EVP_PKEY_get_bn_param(dh->pkey, OSSL_PKEY_PARAM_PUB_KEY, pub_key) != 1) {
+		return SSH_ERR_LIBCRYPTO_ERROR;
+	}
+
+	return 0;
+#else
+	*pub_key = BN_dup(DH_get0_pub_key(dh));
+	if (*pub_key == NULL) {
+		return SSH_ERR_ALLOC_FAIL;
+	}
+
+	return 0;
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 }
 
 #endif /* WITH_OPENSSL */

@@ -28,26 +28,33 @@
 
 #ifdef WITH_OPENSSL
 
-struct dhgroup {
-	int size;
-	BIGNUM *g;
-	BIGNUM *p;
-};
+#include "ssh-dh-key.h"
 
-DH	*choose_dh(int, int, int);
-DH	*dh_new_group_asc(const char *, const char *);
-DH	*dh_new_group(BIGNUM *, BIGNUM *);
-DH	*dh_new_group1(void);
-DH	*dh_new_group14(void);
-DH	*dh_new_group16(void);
-DH	*dh_new_group18(void);
-DH	*dh_new_group_fallback(int);
+SSH_DH_KEY *choose_dh(int, int, int);
 
-int	 dh_gen_key(DH *, int);
-int	 dh_pub_is_valid(const DH *, const BIGNUM *);
+SSH_DH_KEY *dh_new_group(BIGNUM *, BIGNUM *);
+SSH_DH_KEY *dh_new_group1(void);
+SSH_DH_KEY *dh_new_group14(void);
+SSH_DH_KEY *dh_new_group16(void);
+SSH_DH_KEY *dh_new_group18(void);
+
+int	 dh_gen_key(SSH_DH_KEY *dh, int);
+int  dh_compute_key(SSH_DH_KEY *dh, BIGNUM *dh_pub, BIGNUM **shared_secret);
+
+void	 dh_free(SSH_DH_KEY *dh);
 
 u_int	 dh_estimate(int);
 void	 dh_set_moduli_file(const char *);
+
+int      ssh_dh_key_get_pg(const SSH_DH_KEY *dh, BIGNUM **pp, BIGNUM **gp);
+int      ssh_dh_key_get_pub(const SSH_DH_KEY *dh, BIGNUM **pub_key);
+
+#if 1
+
+#if 0
+DH	*dh_new_group_asc(const char *, const char *);
+DH	*dh_new_group_fallback(int);
+#endif
 
 /*
  * Max value from RFC4419.
@@ -78,6 +85,7 @@ void	 dh_set_moduli_file(const char *);
 #define MODULI_TESTS_MILLER_RABIN	(0x04)
 #define MODULI_TESTS_JACOBI		(0x08)
 #define MODULI_TESTS_ELLIPTIC		(0x10)
+#endif
 
 #endif /* WITH_OPENSSL */
 

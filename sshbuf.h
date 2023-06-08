@@ -22,6 +22,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #ifdef WITH_OPENSSL
+# include <openssl/evp.h>
 # include <openssl/bn.h>
 # ifdef OPENSSL_HAS_ECC
 #  include <openssl/ec.h>
@@ -49,6 +50,8 @@ struct sshbuf {
 	u_int refcount;		/* Tracks self and number of child buffers */
 	struct sshbuf *parent;	/* If child, pointer to parent */
 };
+
+struct sshkey;
 
 /*
  * Create a new sshbuf buffer.
@@ -235,9 +238,15 @@ int	sshbuf_get_bignum2(struct sshbuf *buf, BIGNUM **valp);
 int	sshbuf_put_bignum2(struct sshbuf *buf, const BIGNUM *v);
 # ifdef OPENSSL_HAS_ECC
 int	sshbuf_get_ec(struct sshbuf *buf, EC_POINT *v, const EC_GROUP *g);
-int	sshbuf_get_eckey(struct sshbuf *buf, EC_KEY *v);
 int	sshbuf_put_ec(struct sshbuf *buf, const EC_POINT *v, const EC_GROUP *g);
+#  if OPENSSL_VERSION_NUMBER >= 0x3000000L
+int	sshbuf_get_eckey(struct sshbuf *buf, EVP_PKEY **vp);
+int	sshbuf_put_evp_pkey_ec(struct sshbuf *buf, EVP_PKEY *pkey, int private);
+int	sshbuf_put_eckey(struct sshbuf *buf, const struct sshkey *key, int private);
+#  else
+int	sshbuf_get_eckey(struct sshbuf *buf, EC_KEY *v);
 int	sshbuf_put_eckey(struct sshbuf *buf, const EC_KEY *v);
+#  endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 # endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
 

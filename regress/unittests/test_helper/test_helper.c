@@ -131,7 +131,9 @@ main(int argc, char **argv)
 
 	seed_rng();
 #ifdef WITH_OPENSSL
+#if OPENSSL_VERSION_NUMBER < 0x3000000L
 	ERR_load_CRYPTO_strings();
+#endif
 #endif
 
 	/* Handle systems without __progname */

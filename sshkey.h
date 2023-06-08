@@ -26,9 +26,11 @@
 #ifndef SSHKEY_H
 #define SSHKEY_H
 
+#include <stdint.h>
 #include <sys/types.h>
 
 #ifdef WITH_OPENSSL
+#include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/dsa.h>
 # ifdef OPENSSL_HAS_ECC
@@ -125,6 +127,12 @@ struct sshkey_cert {
 struct sshkey {
 	int	 type;
 	int	 flags;
+#if defined (WITH_OPENSSL) && OPENSSL_VERSION_NUMBER >= 0x3000000L
+	/* KEY_RSA, KEY_DSA, KEY_ECDSA, and KEY_ECDSA_SK */
+	EVP_PKEY *pkey;
+	/* KEY_ECDSA and KEY_ECDSA_SK */
+	int	 ecdsa_nid;	/* NID of curve */
+#else
 	/* KEY_RSA */
 	RSA	*rsa;
 	/* KEY_DSA */
@@ -132,6 +140,7 @@ struct sshkey {
 	/* KEY_ECDSA and KEY_ECDSA_SK */
 	int	 ecdsa_nid;	/* NID of curve */
 	EC_KEY	*ecdsa;
+#endif
 	/* KEY_ED25519 and KEY_ED25519_SK */
 	u_char	*ed25519_sk;
 	u_char	*ed25519_pk;
@@ -162,6 +171,36 @@ struct sshkey {
 struct sshkey_sig_details {
 	uint32_t sk_counter;	/* U2F signature counter */
 	uint8_t sk_flags;	/* U2F signature flags; see ssh-sk.h */
+};
+
+/* From PKCS #1 RSAPrivateKey */
+struct ssh_rsa_key_params
+{
+	/* public key */
+	BIGNUM *n; /* modulus */
+	BIGNUM *e; /* publicExponent */
+	/* private key */
+	BIGNUM *d; /* privateExponent */
+	BIGNUM *p; /* prime1 */
+	BIGNUM *q; /* prime2 */
+	BIGNUM *iqmp; /* coefficient ((inverse of q) mod p)*/
+};
+
+struct ssh_dsa_key_params
+{
+	BIGNUM *p;
+	BIGNUM *g;
+	BIGNUM *q;
+	BIGNUM *pub_key;
+	BIGNUM *priv_key;
+};
+
+struct ssh_ec_key_params
+{
+	int curve_nid;
+	unsigned char *pub;
+	size_t pub_len;
+	BIGNUM *exponent;
 };
 
 struct sshkey	*sshkey_new(int);
@@ -223,10 +262,18 @@ int		 sshkey_curve_name_to_nid(const char *);
 const char *	 sshkey_curve_nid_to_name(int);
 u_int		 sshkey_curve_nid_to_bits(int);
 int		 sshkey_ecdsa_bits_to_nid(int);
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+int		 sshkey_ecdsa_key_to_nid(EVP_PKEY *);
+#else
 int		 sshkey_ecdsa_key_to_nid(EC_KEY *);
+#endif
 int		 sshkey_ec_nid_to_hash_alg(int nid);
 int		 sshkey_ec_validate_public(const EC_GROUP *, const EC_POINT *);
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+int		 sshkey_ec_validate_private(EVP_PKEY *);
+#else
 int		 sshkey_ec_validate_private(const EC_KEY *);
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 const char	*sshkey_ssh_name(const struct sshkey *);
 const char	*sshkey_ssh_name_plain(const struct sshkey *);
 int		 sshkey_names_valid2(const char *, int);
@@ -254,7 +301,12 @@ int	 sshkey_get_sigtype(const u_char *, size_t, char **);
 
 /* for debug */
 void	sshkey_dump_ec_point(const EC_GROUP *, const EC_POINT *);
+
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+void	sshkey_dump_ec_key(EVP_PKEY *);
+#else
 void	sshkey_dump_ec_key(const EC_KEY *);
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 
 /* private key parsing and serialisation */
 int	sshkey_private_serialize(struct sshkey *key, struct sshbuf *buf);
@@ -274,7 +326,23 @@ int	sshkey_parse_pubkey_from_private_fileblob_type(struct sshbuf *blob,
     int type, struct sshkey **pubkeyp);
 
 /* XXX should be internal, but used by ssh-keygen */
-int ssh_rsa_complete_crt_parameters(struct sshkey *, const BIGNUM *);
+/* Note: may borrow values from rsa_params */
+int	 ssh_rsa_new_key(struct sshkey *key, struct ssh_rsa_key_params *param);
+int	 ssh_get_rsa_key_params(const struct sshkey *key, struct ssh_rsa_key_params *rsa_param, int private);
+void	 ssh_rsa_key_params_deinit(struct ssh_rsa_key_params *params);
+
+/* Note: may borrow values from dsa_params */
+int	 ssh_dsa_new_key(struct sshkey *key, struct ssh_dsa_key_params *params);
+int	 ssh_get_dsa_key_params(const struct sshkey *key, struct ssh_dsa_key_params *dsa_param, int private);
+void	 ssh_dsa_key_params_deinit(struct ssh_dsa_key_params *params);
+
+int	 ssh_ec_new_key(struct sshkey *key, struct ssh_ec_key_params *ec_param);
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+int	 ssh_get_ec_key_params(EVP_PKEY *pkey, struct ssh_ec_key_params *ec_param, int private);
+#else
+int	 ssh_get_ec_key_params(const struct sshkey *key, struct ssh_ec_key_params *ec_param, int private);
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
+void	 ssh_ec_key_params_deinit(struct ssh_ec_key_params *param);
 
 /* stateful keys (e.g. XMSS) */
 int	 sshkey_set_filename(struct sshkey *, const char *);

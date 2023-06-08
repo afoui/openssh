@@ -334,6 +334,7 @@ RSA_set0_factors(RSA *r, BIGNUM *p, BIGNUM *q)
 }
 #endif /* HAVE_RSA_SET0_FACTORS */
 
+#if OPENSSL_VERSION_NUMBER < 0x3000000L
 #ifndef HAVE_EVP_CIPHER_CTX_GET_IV
 int
 EVP_CIPHER_CTX_get_iv(const EVP_CIPHER_CTX *ctx, unsigned char *iv, size_t len)
@@ -391,6 +392,7 @@ EVP_CIPHER_CTX_set_iv(EVP_CIPHER_CTX *ctx, const unsigned char *iv, size_t len)
 	return 1;
 }
 #endif /* HAVE_EVP_CIPHER_CTX_SET_IV */
+#endif /* OPENSSL_VERSION_NUMBER < 0x3000000L */
 
 #ifndef HAVE_DSA_SIG_GET0
 void

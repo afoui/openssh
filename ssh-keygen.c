@@ -21,8 +21,13 @@
 #ifdef WITH_OPENSSL
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+#include <openssl/decoder.h>
+#include <openssl/encoder.h>
+#include <openssl/pkcs12.h>
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #include "openbsd-compat/openssl-compat.h"
-#endif
+#endif /* WITH_OPENSSL */
 
 #ifdef HAVE_STDINT_H
 # include <stdint.h>
@@ -174,7 +179,7 @@ static char hostname[NI_MAXHOST];
 #ifdef WITH_OPENSSL
 /* moduli.c */
 int gen_candidates(FILE *, u_int32_t, u_int32_t, BIGNUM *);
-int prime_test(FILE *, FILE *, u_int32_t, u_int32_t, char *, unsigned long,
+int prime_test(FILE *, FILE *, u_int32_t, char *, unsigned long,
     unsigned long);
 #endif
 
@@ -374,6 +379,24 @@ do_convert_to_ssh2(struct passwd *pw, struct sshkey *k)
 static void
 do_convert_to_pkcs8(struct sshkey *k)
 {
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	OSSL_ENCODER_CTX *ctx = NULL;
+
+	if (k->pkey == NULL) {
+		fatal_f("unsupported key type %s", sshkey_type(k));
+	}
+
+	ctx = OSSL_ENCODER_CTX_new_for_pkey(k->pkey, OSSL_KEYMGMT_SELECT_PUBLIC_KEY, "PEM", "SubjectPublicKeyInfo", NULL);
+	if (ctx == NULL) {
+		fatal("OSSL_ENCODER_CTX_new_for_pkey failed");
+	}
+
+	if (OSSL_ENCODER_to_fp(ctx, stdout) != 1) {
+		fatal("OSSL_ENCODER_to_fp failed");
+	}
+
+	OSSL_ENCODER_CTX_free(ctx);
+#else
 	switch (sshkey_type_plain(k->type)) {
 	case KEY_RSA:
 		if (!PEM_write_RSA_PUBKEY(stdout, k->rsa))
@@ -392,12 +415,45 @@ do_convert_to_pkcs8(struct sshkey *k)
 	default:
 		fatal_f("unsupported key type %s", sshkey_type(k));
 	}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 	exit(0);
 }
 
 static void
 do_convert_to_pem(struct sshkey *k)
 {
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	OSSL_ENCODER_CTX *ctx = NULL;
+	const char *output_structure = NULL;
+
+	switch (sshkey_type_plain(k->type)) {
+	case KEY_RSA:
+#ifdef OPENSSL_HAS_ECC
+	case KEY_ECDSA:
+#endif
+		output_structure = NULL;
+		break;
+
+	case KEY_DSA:
+		output_structure = "SubjectPublicKeyInfo";
+		break;
+
+	default:
+		fatal_f("unsupported key type %s", sshkey_type(k));
+		break;
+	}
+
+	ctx = OSSL_ENCODER_CTX_new_for_pkey(k->pkey, OSSL_KEYMGMT_SELECT_PUBLIC_KEY, "PEM", output_structure, NULL);
+	if (ctx == NULL) {
+		fatal("OSSL_ENCODER_CTX_new_for_pkey failed");
+	}
+
+	if (OSSL_ENCODER_to_fp(ctx, stdout) != 1) {
+		fatal("OSSL_ENCODER_to_fp failed");
+	}
+
+	OSSL_ENCODER_CTX_free(ctx);
+#else
 	switch (sshkey_type_plain(k->type)) {
 	case KEY_RSA:
 		if (!PEM_write_RSAPublicKey(stdout, k->rsa))
@@ -416,6 +472,7 @@ do_convert_to_pem(struct sshkey *k)
 	default:
 		fatal_f("unsupported key type %s", sshkey_type(k));
 	}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 	exit(0);
 }
 
@@ -470,6 +527,113 @@ buffer_get_bignum_bits(struct sshbuf *b, BIGNUM *value)
 		fatal_fr(r, "consume");
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+static int
+convert_private_ssh2_dsa(struct sshbuf *b, struct sshkey *key)
+{
+	struct ssh_dsa_key_params dsa_param;
+	int r;
+
+	memset(&dsa_param, 0, sizeof dsa_param);
+	if ((dsa_param.p = BN_new()) == NULL ||
+	    (dsa_param.q = BN_new()) == NULL ||
+	    (dsa_param.g = BN_new()) == NULL ||
+	    (dsa_param.pub_key = BN_new()) == NULL ||
+	    (dsa_param.priv_key = BN_new()) == NULL)
+		fatal_f("BN_new");
+	buffer_get_bignum_bits(b, dsa_param.p);
+	buffer_get_bignum_bits(b, dsa_param.g);
+	buffer_get_bignum_bits(b, dsa_param.q);
+	buffer_get_bignum_bits(b, dsa_param.pub_key);
+	buffer_get_bignum_bits(b, dsa_param.priv_key);
+
+	r = ssh_dsa_new_key(key, &dsa_param);
+	if (r != 0) {
+		goto out;
+	}
+
+	r = 0;
+out:
+	ssh_dsa_key_params_deinit(&dsa_param);
+	return r;
+}
+
+static int
+convert_private_ssh2_rsa(struct sshbuf *b, struct sshkey *key)
+{
+	int r = SSH_ERR_INTERNAL_ERROR;
+	u_char e1, e2, e3;
+	u_long e;
+	struct ssh_rsa_key_params rsa_param;
+
+	memset(&rsa_param, 0, sizeof rsa_param);
+	if ((r = sshbuf_get_u8(b, &e1)) != 0 ||
+	    (e1 < 30 && (r = sshbuf_get_u8(b, &e2)) != 0) ||
+	    (e1 < 30 && (r = sshbuf_get_u8(b, &e3)) != 0))
+		fatal_fr(r, "parse RSA");
+	e = e1;
+	debug("e %lx", e);
+	if (e < 30) {
+		e <<= 8;
+		e += e2;
+		debug("e %lx", e);
+		e <<= 8;
+		e += e3;
+		debug("e %lx", e);
+	}
+	if ((rsa_param.e = BN_new()) == NULL)
+		fatal_f("BN_new");
+
+	if (!BN_set_word(rsa_param.e, e)) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((rsa_param.n = BN_new()) == NULL ||
+	    (rsa_param.d = BN_new()) == NULL ||
+	    (rsa_param.p = BN_new()) == NULL ||
+	    (rsa_param.q = BN_new()) == NULL ||
+	    (rsa_param.iqmp = BN_new()) == NULL)
+		fatal_f("BN_new");
+	buffer_get_bignum_bits(b, rsa_param.d);
+	buffer_get_bignum_bits(b, rsa_param.n);
+	buffer_get_bignum_bits(b, rsa_param.iqmp);
+	buffer_get_bignum_bits(b, rsa_param.q);
+	buffer_get_bignum_bits(b, rsa_param.p);
+
+	r = ssh_rsa_new_key(key, &rsa_param);
+	if (r != 0) {
+		goto out;
+	}
+
+	r = 0;
+out:
+	ssh_rsa_key_params_deinit(&rsa_param);
+	return r;
+}
+
+static int
+pem_write_pkey(FILE *fp, EVP_PKEY *pkey)
+{
+	int ok = 0;
+	OSSL_ENCODER_CTX *ectx = NULL;
+	ectx = OSSL_ENCODER_CTX_new_for_pkey(pkey, EVP_PKEY_KEYPAIR, "PEM", "type-specific", NULL);
+	if (ectx == NULL) {
+		goto out;
+	}
+
+	if (OSSL_ENCODER_to_fp(ectx, fp) != 1) {
+		goto out;
+	}
+
+	ok = 1;
+
+out:
+	OSSL_ENCODER_CTX_free(ectx);
+	return ok;
+}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
+
 static struct sshkey *
 do_convert_private_ssh2(struct sshbuf *b)
 {
@@ -521,6 +685,24 @@ do_convert_private_ssh2(struct sshbuf *b)
 		fatal("sshkey_new failed");
 	free(type);
 
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	switch (key->type) {
+	case KEY_DSA:
+		r = convert_private_ssh2_dsa(b, key);
+		if (r != 0) {
+			sshkey_free(key);
+			return NULL;
+		}
+		break;
+	case KEY_RSA:
+		r = convert_private_ssh2_rsa(b, key);
+		if (r != 0) {
+			sshkey_free(key);
+			return NULL;
+		}
+		break;
+	}
+#else
 	switch (key->type) {
 	case KEY_DSA:
 		if ((dsa_p = BN_new()) == NULL ||
@@ -585,6 +767,7 @@ do_convert_private_ssh2(struct sshbuf *b)
 		BN_clear_free(rsa_iqmp);
 		break;
 	}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 	rlen = sshbuf_len(b);
 	if (rlen != 0)
 		error_f("remaining bytes in key blob %d", rlen);
@@ -694,6 +877,30 @@ do_convert_from_pkcs8(struct sshkey **k, int *private)
 	}
 	fclose(fp);
 	switch (EVP_PKEY_base_id(pubkey)) {
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	case EVP_PKEY_RSA:
+		if ((*k = sshkey_new(KEY_UNSPEC)) == NULL)
+			fatal("sshkey_new failed");
+		(*k)->type = KEY_RSA;
+		(*k)->pkey = pubkey;
+		pubkey = NULL;
+		break;
+	case EVP_PKEY_DSA:
+		if ((*k = sshkey_new(KEY_UNSPEC)) == NULL)
+			fatal("sshkey_new failed");
+		(*k)->type = KEY_DSA;
+		(*k)->pkey = pubkey;
+		pubkey = NULL;
+		break;
+	case EVP_PKEY_EC:
+		if ((*k = sshkey_new(KEY_UNSPEC)) == NULL)
+			fatal("sshkey_new failed");
+		(*k)->type = KEY_ECDSA;
+		(*k)->pkey = pubkey;
+		pubkey = NULL;
+		(*k)->ecdsa_nid = sshkey_ecdsa_key_to_nid((*k)->pkey);
+		break;
+#else
 	case EVP_PKEY_RSA:
 		if ((*k = sshkey_new(KEY_UNSPEC)) == NULL)
 			fatal("sshkey_new failed");
@@ -715,6 +922,7 @@ do_convert_from_pkcs8(struct sshkey **k, int *private)
 		(*k)->ecdsa_nid = sshkey_ecdsa_key_to_nid((*k)->ecdsa);
 		break;
 #endif
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 	default:
 		fatal_f("unsupported pubkey type %d",
 		    EVP_PKEY_base_id(pubkey));
@@ -727,19 +935,37 @@ static void
 do_convert_from_pem(struct sshkey **k, int *private)
 {
 	FILE *fp;
-	RSA *rsa;
 
 	if ((fp = fopen(identity_file, "r")) == NULL)
 		fatal("%s: %s: %s", __progname, identity_file, strerror(errno));
-	if ((rsa = PEM_read_RSAPublicKey(fp, NULL, NULL, NULL)) != NULL) {
-		if ((*k = sshkey_new(KEY_UNSPEC)) == NULL)
-			fatal("sshkey_new failed");
-		(*k)->type = KEY_RSA;
-		(*k)->rsa = rsa;
-		fclose(fp);
-		return;
+	if ((*k = sshkey_new(KEY_UNSPEC)) == NULL)
+		fatal("sshkey_new failed");
+
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	OSSL_DECODER_CTX *dctx = NULL;
+	EVP_PKEY *pkey = NULL;
+	/* FIXME: does not reject PKCS #8-encoded public keys, like PEM_read_RSAPublicKey does. */
+	dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, "PEM", "type-specific", "RSA", EVP_PKEY_PUBLIC_KEY, NULL, NULL);
+	if (dctx == NULL) {
+		fatal_f("OSSL_DECODER_CTX_new_for_pkey failed");
 	}
-	fatal_f("unrecognised raw private key format");
+
+	if (OSSL_DECODER_from_fp(dctx, fp) != 1) {
+		// XXX: "private"?!
+		fatal_f("unrecognised raw private key format");
+	}
+
+	OSSL_DECODER_CTX_free(dctx);
+
+	(*k)->pkey = pkey;
+#else
+	(*k)->rsa = PEM_read_RSAPublicKey(fp, NULL, NULL, NULL);
+	if ((*k)->rsa == NULL) {
+		fatal_f("unrecognised raw private key format");
+	}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
+	(*k)->type = KEY_RSA;
+	fclose(fp);
 }
 
 static void
@@ -774,6 +1000,19 @@ do_convert_from(struct passwd *pw)
 		if (ok)
 			fprintf(stdout, "\n");
 	} else {
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+		switch (k->type) {
+		case KEY_DSA:
+#ifdef OPENSSL_HAS_ECC
+		case KEY_ECDSA:
+#endif
+		case KEY_RSA:
+			ok = pem_write_pkey(stdout, k->pkey);
+			break;
+		default:
+			fatal_f("unsupported key type %s", sshkey_type(k));
+		}
+#else
 		switch (k->type) {
 		case KEY_DSA:
 			ok = PEM_write_DSAPrivateKey(stdout, k->dsa, NULL,
@@ -792,6 +1031,7 @@ do_convert_from(struct passwd *pw)
 		default:
 			fatal_f("unsupported key type %s", sshkey_type(k));
 		}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 	}
 
 	if (!ok)
@@ -2950,7 +3190,6 @@ do_moduli_screen(const char *out_file, char **opts, size_t nopts)
 	char *checkpoint = NULL;
 	u_int32_t generator_wanted = 0;
 	unsigned long start_lineno = 0, lines_to_process = 0;
-	int prime_tests = 0;
 	FILE *out, *in = stdin;
 	size_t i;
 	const char *errstr;
@@ -2969,13 +3208,6 @@ do_moduli_screen(const char *out_file, char **opts, size_t nopts)
 			if (errstr != NULL) {
 				fatal("Generator invalid: %s (%s)",
 				    opts[i]+10, errstr);
-			}
-		} else if (strncmp(opts[i], "prime-tests=", 12) == 0) {
-			prime_tests = (int)strtonum(opts[i]+12, 1,
-			    INT_MAX, &errstr);
-			if (errstr) {
-				fatal("Invalid number: %s (%s)",
-					opts[i]+12, errstr);
 			}
 		} else {
 			fatal("Option \"%s\" is unsupported for moduli "
@@ -2996,7 +3228,7 @@ do_moduli_screen(const char *out_file, char **opts, size_t nopts)
 		    out_file, strerror(errno));
 	}
 	setvbuf(out, NULL, _IOLBF, 0);
-	if (prime_test(in, out, prime_tests == 0 ? 100 : prime_tests,
+	if (prime_test(in, out,
 	    generator_wanted, checkpoint,
 	    start_lineno, lines_to_process) != 0)
 		fatal("modulus screening failed");

@@ -36,6 +36,9 @@
 #include <openssl/ec.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
+# if OPENSSL_VERSION_NUMBER >= 0x3000000L
+# include <openssl/core_names.h>
+# endif
 #endif
 
 #include <string.h>
@@ -137,6 +140,109 @@ webauthn_check_prepare_hash(const u_char *data, size_t datalen,
 	return r;
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+static int
+ecdsa_key_is_null(const struct sshkey *key)
+{
+	return key->pkey == NULL;
+}
+
+static int
+ecdsa_verify_signature(const struct sshbuf *original_signed, const ECDSA_SIG *sig, const struct sshkey *key)
+{
+	int ret;
+	int siglen = 0;
+	unsigned char *sigbytes = NULL;
+	unsigned char *p = NULL;
+	EVP_MD_CTX *ctx = NULL;
+	const char *mdname = OSSL_DIGEST_NAME_SHA2_256;
+
+#ifdef DEBUG_SK
+	fprintf(stderr, "%s: signed buf:\n", __func__);
+	sshbuf_dump(original_signed, stderr);
+#endif
+
+	siglen = i2d_ECDSA_SIG(sig, NULL);
+	if (siglen <= 0) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((sigbytes = malloc(siglen)) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	p = sigbytes;
+	if (i2d_ECDSA_SIG(sig, &p) != siglen) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerifyInit_ex(ctx, NULL, mdname, NULL, NULL, key->pkey, NULL) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerify(ctx, sigbytes, siglen, sshbuf_ptr(original_signed), sshbuf_len(original_signed)) != 1) {
+		ret = SSH_ERR_SIGNATURE_INVALID;
+		goto out;
+	}
+
+	ret = 0;
+
+out:
+	EVP_MD_CTX_free(ctx);
+	freezero(sigbytes, siglen);
+	return ret;
+}
+#else
+static int
+ecdsa_key_is_null(const struct sshkey *key)
+{
+	return key->ecdsa == NULL;
+}
+
+static int
+ecdsa_verify_signature(const struct sshbuf *original_signed, size_t datalen, const ECDSA_SIG *sig, const struct sshkey *key)
+{
+	int ret;
+	u_char sighash[32];
+
+	if ((ret = ssh_digest_buffer(SSH_DIGEST_SHA256, original_signed,
+	    sighash, sizeof(sighash))) != 0)
+		goto out;
+
+#ifdef DEBUG_SK
+	fprintf(stderr, "%s: signed buf:\n", __func__);
+	sshbuf_dump(original_signed, stderr);
+	fprintf(stderr, "%s: signed hash:\n", __func__);
+	sshbuf_dump_data(sighash, sizeof(sighash), stderr);
+#endif
+
+	switch (ECDSA_do_verify(sighash, sizeof(sighash), sig, key->ecdsa)) {
+	case 1:
+		ret = 0;
+		break;
+	case 0:
+		ret = SSH_ERR_SIGNATURE_INVALID;
+		break;
+	default:
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		break;
+	}
+
+out:
+	explicit_bzero(sighash, sizeof(msghash));
+	return ret;
+}
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
+
 /* ARGSUSED */
 int
 ssh_ecdsa_sk_verify(const struct sshkey *key,
@@ -147,7 +253,7 @@ ssh_ecdsa_sk_verify(const struct sshkey *key,
 	ECDSA_SIG *sig = NULL;
 	BIGNUM *sig_r = NULL, *sig_s = NULL;
 	u_char sig_flags;
-	u_char msghash[32], apphash[32], sighash[32];
+	u_char msghash[32], apphash[32];
 	u_int sig_counter;
 	int is_webauthn = 0, ret = SSH_ERR_INTERNAL_ERROR;
 	struct sshbuf *b = NULL, *sigbuf = NULL, *original_signed = NULL;
@@ -160,7 +266,7 @@ ssh_ecdsa_sk_verify(const struct sshkey *key,
 
 	if (detailsp != NULL)
 		*detailsp = NULL;
-	if (key == NULL || key->ecdsa == NULL ||
+	if (key == NULL || ecdsa_key_is_null(key) ||
 	    sshkey_type_plain(key->type) != KEY_ECDSA_SK ||
 	    signature == NULL || signaturelen == 0)
 		return SSH_ERR_INVALID_ARGUMENT;
@@ -271,31 +377,19 @@ ssh_ecdsa_sk_verify(const struct sshkey *key,
 	    (ret = sshbuf_putb(original_signed, webauthn_exts)) != 0 ||
 	    (ret = sshbuf_put(original_signed, msghash, sizeof(msghash))) != 0)
 		goto out;
-	/* Signature is over H(original_signed) */
-	if ((ret = ssh_digest_buffer(SSH_DIGEST_SHA256, original_signed,
-	    sighash, sizeof(sighash))) != 0)
-		goto out;
+
 	details->sk_counter = sig_counter;
 	details->sk_flags = sig_flags;
-#ifdef DEBUG_SK
-	fprintf(stderr, "%s: signed buf:\n", __func__);
-	sshbuf_dump(original_signed, stderr);
-	fprintf(stderr, "%s: signed hash:\n", __func__);
-	sshbuf_dump_data(sighash, sizeof(sighash), stderr);
-#endif
 
+	/* Signature is over H(original_signed) */
 	/* Verify it */
-	switch (ECDSA_do_verify(sighash, sizeof(sighash), sig, key->ecdsa)) {
-	case 1:
-		ret = 0;
-		break;
-	case 0:
-		ret = SSH_ERR_SIGNATURE_INVALID;
-		goto out;
-	default:
-		ret = SSH_ERR_LIBCRYPTO_ERROR;
+
+	ret = ecdsa_verify_signature(original_signed, sig, key);
+	fprintf(stderr, "ecdsa_verify_signature: %d\n", ret);
+	if (ret != 0) {
 		goto out;
 	}
+
 	/* success */
 	if (detailsp != NULL) {
 		*detailsp = details;
@@ -305,7 +399,6 @@ ssh_ecdsa_sk_verify(const struct sshkey *key,
 	explicit_bzero(&sig_flags, sizeof(sig_flags));
 	explicit_bzero(&sig_counter, sizeof(sig_counter));
 	explicit_bzero(msghash, sizeof(msghash));
-	explicit_bzero(sighash, sizeof(msghash));
 	explicit_bzero(apphash, sizeof(apphash));
 	sshkey_sig_details_free(details);
 	sshbuf_free(webauthn_wrapper);

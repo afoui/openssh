@@ -16,6 +16,10 @@
 #define SSH_LOG_H
 
 #include <stdarg.h> /* va_list */
+#ifdef WITH_OPENSSL
+# include <openssl/evp.h> /* EVP_PKEY */
+# include <openssl/bn.h>
+#endif /* WITH_OPENSSL */
 #include "ssherr.h" /* ssh_err() */
 
 /* Supported syslog facilities and levels. */

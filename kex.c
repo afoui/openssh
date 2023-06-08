@@ -61,6 +61,7 @@
 #include "ssherr.h"
 #include "sshbuf.h"
 #include "digest.h"
+#include "dh.h"
 
 /* prototype */
 static int kex_choose_conf(struct ssh *);
@@ -702,10 +703,14 @@ kex_free(struct kex *kex)
 		return;
 
 #ifdef WITH_OPENSSL
-	DH_free(kex->dh);
+	dh_free(kex->dh);
 #ifdef OPENSSL_HAS_ECC
+#if OPENSSL_VERSION_NUMBER >= 0x3000000L
+	EVP_PKEY_free(kex->ec_client_key);
+#else
 	EC_KEY_free(kex->ec_client_key);
 #endif /* OPENSSL_HAS_ECC */
+#endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #endif /* WITH_OPENSSL */
 	for (mode = 0; mode < MODE_MAX; mode++) {
 		kex_free_newkeys(kex->newkeys[mode]);
@@ -1418,4 +1423,3 @@ kex_exchange_identification(struct ssh *ssh, int timeout_ms,
 		errno = oerrno;
 	return r;
 }
-
