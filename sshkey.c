@@ -36,6 +36,12 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
+# if WITH_OPENSSL_V3
+# include <openssl/core_names.h>
+# include <openssl/encoder.h>
+# include <openssl/pkcs12.h>
+# include "osslv3.h"
+# endif /* WITH_OPENSSL_V3 */
 #endif
 
 #include "crypto_api.h"
@@ -1458,6 +1464,35 @@ sshkey_check_rsa_length(const struct sshkey *k, int min_size)
 }
 
 #if defined(WITH_OPENSSL) && defined(OPENSSL_HAS_ECC)
+# if WITH_OPENSSL_V3
+int
+sshkey_ecdsa_pkey_to_nid(EVP_PKEY *pkey)
+{
+	static const int nids[] = {
+		NID_X9_62_prime256v1,
+		NID_secp384r1,
+#  ifdef OPENSSL_HAS_NISTP521
+		NID_secp521r1,
+#  endif /* OPENSSL_HAS_NISTP521 */
+		-1
+	};
+
+	char name[100];
+	size_t gname_len;
+	int nid;
+	size_t i;
+	if (EVP_PKEY_get_group_name(pkey, name, sizeof name, &gname_len) != 1)
+		return SSH_ERR_LIBCRYPTO_ERROR;
+
+	nid = OBJ_txt2nid(name);
+	for (i = 0; nids[i] != -1; ++i) {
+		if (nid == nids[i])
+			break;
+	}
+
+	return nids[i];
+}
+# else
 int
 sshkey_ecdsa_key_to_nid(const EC_KEY *k)
 {
@@ -1476,6 +1511,7 @@ sshkey_ecdsa_pkey_to_nid(EVP_PKEY *pkey)
 {
 	return sshkey_ecdsa_key_to_nid(EVP_PKEY_get0_EC_KEY(pkey));
 }
+# endif /* WITH_OPENSSL_V3 */
 #endif /* defined(WITH_OPENSSL) && defined(OPENSSL_HAS_ECC) */
 
 int
@@ -2592,6 +2628,75 @@ sshkey_private_deserialize_sk(struct sshbuf *buf, struct sshkey *k)
 	return 0;
 }
 
+#if WITH_OPENSSL_V3
+
+static u_char *
+move_ed25519_pk(struct sshkey *k)
+{
+	int r;
+	u_char *pk = NULL;
+	struct ssh_ed25519_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if (k->pkey != NULL)
+	{
+		if ((r = ssh_get_ed25519_key_params(k->pkey, &kp, 0)) == 0)
+		{
+			pk = malloc(ED25519_PK_SZ);
+			if (pk != NULL)
+				memcpy(pk, &kp.sk[ED25519_SK_SZ - ED25519_PK_SZ], ED25519_PK_SZ);
+		}
+	}
+
+	ssh_ed25519_key_params_deinit(&kp);
+	return pk;
+}
+
+static int
+cmp_ed25519_pk(struct sshkey *k, const u_char *expected_pk)
+{
+	int r;
+	struct ssh_ed25519_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if (k->pkey == NULL) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+	if ((r = ssh_get_ed25519_key_params(k->pkey, &kp, 0)) != 0) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	r = memcmp(expected_pk, &kp.sk[ED25519_SK_SZ - ED25519_PK_SZ], ED25519_PK_SZ);
+
+ out:
+	ssh_ed25519_key_params_deinit(&kp);
+	return r;
+}
+
+#else
+
+static u_char *
+move_ed25519_pk(struct sshkey *k)
+{
+	u_char *pk = NULL;
+
+	pk = k->ed25519_pk;
+	k->ed25519_pk = NULL;
+	return pk;
+}
+
+static int
+cmp_ed25519_pk(struct sshkey *k, const u_char *expected_pk)
+{
+	if (k->ed25519_pk == NULL)
+		return -1;
+	return memcmp(expected_pk, k->ed25519_pk, ED25519_PK_SZ);
+}
+
+#endif /* WITH_OPENSSL_V3 */
+
 int
 sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 {
@@ -2630,9 +2735,8 @@ sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 		 * private key body, we require these to match.
 		 */
 		expect_sk_application = k->sk_application;
-		expect_ed25519_pk = k->ed25519_pk;
 		k->sk_application = NULL;
-		k->ed25519_pk = NULL;
+		expect_ed25519_pk = move_ed25519_pk(k);
 	} else {
 		if ((k = sshkey_new(type)) == NULL) {
 			r = SSH_ERR_ALLOC_FAIL;
@@ -2648,8 +2752,7 @@ sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 
 	if ((expect_sk_application != NULL && (k->sk_application == NULL ||
 	    strcmp(expect_sk_application, k->sk_application) != 0)) ||
-	    (expect_ed25519_pk != NULL && (k->ed25519_pk == NULL ||
-	    memcmp(expect_ed25519_pk, k->ed25519_pk, ED25519_PK_SZ) != 0))) {
+	    (expect_ed25519_pk != NULL && cmp_ed25519_pk(k, expect_ed25519_pk) != 0)) {
 		r = SSH_ERR_KEY_CERT_MISMATCH;
 		goto out;
 	}
@@ -2668,6 +2771,17 @@ sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 }
 
 #if defined(WITH_OPENSSL) && defined(OPENSSL_HAS_ECC)
+# if WITH_OPENSSL_V3
+
+void
+sshkey_dump_ec_private_key(EVP_PKEY *pkey)
+{
+	EVP_PKEY_print_public_fp(stderr, pkey, 8, NULL);
+	EVP_PKEY_print_private_fp(stderr, pkey, 8, NULL);
+}
+
+# else
+
 int
 sshkey_ec_validate_public(const EC_GROUP *group, const EC_POINT *public)
 {
@@ -2810,6 +2924,8 @@ sshkey_dump_ec_key(const EC_KEY *key)
 		BN_print_fp(stderr, EC_KEY_get0_private_key(key));
 	fputs("\n", stderr);
 }
+
+# endif /* WITH_OPENSSL_V3 */
 #endif /* WITH_OPENSSL && OPENSSL_HAS_ECC */
 
 static int
@@ -3270,6 +3386,114 @@ sshkey_parse_private2_pubkey(struct sshbuf *blob, int type,
 }
 
 #ifdef WITH_OPENSSL
+# if WITH_OPENSSL_V3
+/* convert SSH v2 key to PEM or PKCS#8 format */
+static int
+sshkey_private_to_blob_pem_pkcs8(struct sshkey *key, struct sshbuf *buf,
+    int format, const char *_passphrase, const char *comment)
+{
+	int was_shielded = sshkey_is_shielded(key);
+	int success, r;
+	int blen, len = strlen(_passphrase);
+	u_char *passphrase = (len > 0) ? (u_char *)_passphrase : NULL;
+	char *bptr;
+	BIO *bio = NULL;
+	struct sshbuf *blob = NULL;
+	OSSL_ENCODER_CTX *ctx = NULL;
+	PKCS8_PRIV_KEY_INFO *pkcs8info = NULL;
+	X509_ALGOR *pbe = NULL;
+	X509_SIG *sig = NULL;
+
+	if (len > 0 && len <= 4)
+		return SSH_ERR_PASSPHRASE_TOO_SHORT;
+	if ((blob = sshbuf_new()) == NULL)
+		return SSH_ERR_ALLOC_FAIL;
+	if ((bio = BIO_new(BIO_s_mem())) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshkey_unshield_private(key)) != 0)
+		goto out;
+
+	if (format == SSHKEY_PRIVATE_PEM) {
+		ctx = OSSL_ENCODER_CTX_new_for_pkey(key->pkey, EVP_PKEY_KEYPAIR, "PEM", NULL/*"type-specific"*/, NULL);
+		if (ctx == NULL) {
+			r = SSH_ERR_LIBCRYPTO_ERROR;
+			goto out;
+		}
+
+		if (passphrase != NULL) {
+			if (OSSL_ENCODER_CTX_set_passphrase(ctx, passphrase, len) != 1 ||
+				OSSL_ENCODER_CTX_set_cipher(ctx, "aes-128-cbc", NULL) != 1) {
+				r = SSH_ERR_LIBCRYPTO_ERROR;
+				goto out;
+			}
+		}
+
+		success = OSSL_ENCODER_to_bio(ctx, bio);
+		if (success == 0) {
+			r = SSH_ERR_LIBCRYPTO_ERROR;
+			goto out;
+		}
+	} else {
+		/* PKCS8 */
+		if ((pkcs8info = EVP_PKEY2PKCS8(key->pkey)) == NULL) {
+			r = SSH_ERR_LIBCRYPTO_ERROR;
+			goto out;
+		}
+
+		if (len == 0) {
+			if (PEM_write_bio_PKCS8_PRIV_KEY_INFO(bio, pkcs8info) != 1) {
+				r = SSH_ERR_LIBCRYPTO_ERROR;
+				goto out;
+			}
+		} else {
+			const int pbe_nid = -1;
+			const EVP_CIPHER *cipher = EVP_aes_128_cbc();
+			pbe = PKCS5_pbe2_set_iv(cipher, PKCS5_DEFAULT_ITER, NULL, 0, NULL, pbe_nid);
+			if (pbe == NULL) {
+				r = SSH_ERR_LIBCRYPTO_ERROR;
+				goto out;
+			}
+
+			sig = PKCS8_set0_pbe(passphrase, len, pkcs8info, pbe);
+			if (sig == NULL) {
+				r = SSH_ERR_LIBCRYPTO_ERROR;
+				goto out;
+			} else {
+				pbe = NULL;
+			}
+
+			if (PEM_write_bio_PKCS8(bio, sig) != 1) {
+				r = SSH_ERR_LIBCRYPTO_ERROR;
+				goto out;
+			}
+		}
+	}
+
+	if ((blen = BIO_get_mem_data(bio, &bptr)) <= 0) {
+		r = SSH_ERR_INTERNAL_ERROR;
+		goto out;
+	}
+	if ((r = sshbuf_put(blob, bptr, blen)) != 0)
+		goto out;
+
+	r = 0;
+ out:
+	if (was_shielded)
+		r = sshkey_shield_private(key);
+	if (r == 0)
+		r = sshbuf_putb(buf, blob);
+
+	PKCS8_PRIV_KEY_INFO_free(pkcs8info);
+	X509_ALGOR_free(pbe);
+	X509_SIG_free(sig);
+	OSSL_ENCODER_CTX_free(ctx);
+	sshbuf_free(blob);
+	BIO_free(bio);
+	return r;
+}
+# else
 /* convert SSH v2 key to PEM or PKCS#8 format */
 static int
 sshkey_private_to_blob_pem_pkcs8(struct sshkey *key, struct sshbuf *buf,
@@ -3354,6 +3578,7 @@ sshkey_private_to_blob_pem_pkcs8(struct sshkey *key, struct sshbuf *buf,
 	BIO_free(bio);
 	return r;
 }
+# endif /* WITH_OPENSSL_V3 */
 #endif /* WITH_OPENSSL */
 
 /* Serialise "key" to buffer "blob" */
@@ -3475,6 +3700,90 @@ pem_passphrase_cb(char *buf, int size, int rwflag, void *u)
 	return (int)len;
 }
 
+#if WITH_OPENSSL_V3
+
+static int
+sshkey_from_pkey(int type, EVP_PKEY **pkeyp, struct sshkey **keyp)
+{
+	EVP_PKEY *pk = *pkeyp;
+	struct sshkey *key = NULL;
+	int r = 0;
+
+	key = sshkey_new(KEY_UNSPEC);
+	if (key == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	switch (EVP_PKEY_get_base_id(pk)) {
+	case EVP_PKEY_RSA:
+		if (type != KEY_UNSPEC && type != KEY_RSA) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+
+		key->pkey = pk;
+		*pkeyp = NULL;
+		key->type = KEY_RSA;
+		r = sshkey_check_rsa_length(key, 0);
+		if (r != 0) {
+			goto out;
+		}
+
+#ifdef DEBUG_PK
+		EVP_PKEY_print_private_fp(stderr, key->pkey, 8, NULL);
+#endif
+		break;
+
+	case EVP_PKEY_EC:
+		if (type != KEY_UNSPEC && type != KEY_ECDSA) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+
+		key->pkey = pk;
+		*pkeyp = NULL;
+		key->type = KEY_ECDSA;
+		key->ecdsa_nid = sshkey_ecdsa_pkey_to_nid(key->pkey);
+		if (key->ecdsa_nid == -1 ||
+		    sshkey_curve_nid_to_name(key->ecdsa_nid) == NULL) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+
+#ifdef DEBUG_PK
+		EVP_PKEY_print_private_fp(stderr, key->pkey, 8, NULL);
+#endif
+		break;
+
+	case EVP_PKEY_ED25519:
+		if (type != KEY_UNSPEC && type != KEY_ED25519) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+
+		key->pkey = pk;
+		*pkeyp = NULL;
+		key->type = KEY_ED25519;
+# ifdef DEBUG_PK
+		EVP_PKEY_print_private_fp(stderr, key->pkey, 8, NULL);
+# endif
+		break;
+	default:
+		r = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+
+	*keyp = key;
+	key = NULL;
+
+out:
+	sshkey_free(key);
+	return r;
+}
+
+#endif /* WITH_OPENSSL_V3 */
+
 static int
 sshkey_parse_private_pem_fileblob(struct sshbuf *blob, int type,
     const char *passphrase, struct sshkey **keyp)
@@ -3483,8 +3792,10 @@ sshkey_parse_private_pem_fileblob(struct sshbuf *blob, int type,
 	struct sshkey *prv = NULL;
 	BIO *bio = NULL;
 	int r;
+#if !WITH_OPENSSL_V3
 	RSA *rsa = NULL;
 	EC_KEY *ecdsa = NULL;
+#endif
 
 	if (keyp != NULL)
 		*keyp = NULL;
@@ -3512,6 +3823,11 @@ sshkey_parse_private_pem_fileblob(struct sshbuf *blob, int type,
 			r = convert_libcrypto_error();
 		goto out;
 	}
+#if WITH_OPENSSL_V3
+	r = sshkey_from_pkey(type, &pk, &prv);
+	if (r != 0)
+		goto out;
+#else
 	if (EVP_PKEY_base_id(pk) == EVP_PKEY_RSA &&
 	    (type == KEY_UNSPEC || type == KEY_RSA)) {
 		if ((prv = sshkey_new(KEY_UNSPEC)) == NULL) {
@@ -3603,6 +3919,7 @@ sshkey_parse_private_pem_fileblob(struct sshbuf *blob, int type,
 		r = SSH_ERR_INVALID_FORMAT;
 		goto out;
 	}
+#endif /* WITH_OPENSSL_V3 */
 	r = 0;
 	if (keyp != NULL) {
 		*keyp = prv;
@@ -3611,9 +3928,11 @@ sshkey_parse_private_pem_fileblob(struct sshbuf *blob, int type,
  out:
 	BIO_free(bio);
 	EVP_PKEY_free(pk);
+#if !WITH_OPENSSL_V3
 	RSA_free(rsa);
 #ifdef OPENSSL_HAS_ECC
 	EC_KEY_free(ecdsa);
+#endif
 #endif
 	sshkey_free(prv);
 	return r;

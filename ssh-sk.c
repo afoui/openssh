@@ -31,6 +31,11 @@
 #include <openssl/objects.h>
 #include <openssl/ec.h>
 #include <openssl/evp.h>
+#if WITH_OPENSSL_V3
+#include <openssl/param_build.h>
+#include <openssl/core_names.h>
+#include "osslv3.h"
+#endif /* WITH_OPENSSL_V3 */
 #endif /* WITH_OPENSSL && OPENSSL_HAS_ECC */
 
 #include "log.h"
@@ -204,6 +209,80 @@ sshsk_free_sign_response(struct sk_sign_response *r)
 static int
 sshsk_ecdsa_assemble(struct sk_enroll_response *resp, struct sshkey **keyp)
 {
+#if WITH_OPENSSL_V3
+	struct sshkey *key = NULL;
+	const char *group_name = NULL;
+	EVP_PKEY_CTX *ctx = NULL;
+	OSSL_PARAM_BLD *bld = NULL;
+	OSSL_PARAM *param = NULL;
+	int r;
+
+	*keyp = NULL;
+	if ((key = sshkey_new(KEY_ECDSA_SK)) == NULL) {
+		error_f("sshkey_new failed");
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+	if (ctx == NULL) {
+		error_f("%s failed", "EVP_PKEY_CTX_new_from_name");
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata_init(ctx) != 1) {
+		error_f("%s failed", "EVP_PKEY_fromdata_init");
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	bld = OSSL_PARAM_BLD_new();
+	if (bld == NULL) {
+		error_f("%s failed", "OSSL_PARAM_BLD_new");
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	key->ecdsa_nid = NID_X9_62_prime256v1;
+	if ((group_name = OBJ_nid2sn(key->ecdsa_nid)) == NULL) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, group_name, 0) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY, resp->public_key, resp->public_key_len) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((param = OSSL_PARAM_BLD_to_param(bld)) == NULL) {
+		error_f("%s failed", "OSSL_PARAM_BLD_to_param");
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata(ctx, &key->pkey, EVP_PKEY_PUBLIC_KEY, param) != 1) {
+		error_f("%s failed", "EVP_PKEY_fromdata");
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	/* success */
+	*keyp = key;
+	key = NULL; /* transferred */
+	r = 0;
+ out:
+	OSSL_PARAM_free(param);
+	OSSL_PARAM_BLD_free(bld);
+	EVP_PKEY_CTX_free(ctx);
+	sshkey_free(key);
+	return r;
+#else
 	struct sshkey *key = NULL;
 	struct sshbuf *b = NULL;
 	EC_KEY *ecdsa = NULL;
@@ -267,6 +346,7 @@ sshsk_ecdsa_assemble(struct sk_enroll_response *resp, struct sshkey **keyp)
 	EC_KEY_free(ecdsa);
 	EC_POINT_free(q);
 	return r;
+#endif /* WITH_OPENSSL_V3 */
 }
 #endif /* WITH_OPENSSL */
 
@@ -275,7 +355,13 @@ sshsk_ed25519_assemble(struct sk_enroll_response *resp, struct sshkey **keyp)
 {
 	struct sshkey *key = NULL;
 	int r;
+#if WITH_OPENSSL_V3
+	struct ssh_ed25519_key_params kp;
+#endif /* WITH_OPENSSL_V3 */
 
+#if WITH_OPENSSL_V3
+	memset(&kp, 0, sizeof kp);
+#endif /* WITH_OPENSSL_V3 */
 	*keyp = NULL;
 	if (resp->public_key_len != ED25519_PK_SZ) {
 		error_f("invalid size: %zu", resp->public_key_len);
@@ -287,12 +373,18 @@ sshsk_ed25519_assemble(struct sk_enroll_response *resp, struct sshkey **keyp)
 		r = SSH_ERR_ALLOC_FAIL;
 		goto out;
 	}
+#if WITH_OPENSSL_V3
+	memcpy(&kp.sk[ED25519_SK_SZ - ED25519_PK_SZ], resp->public_key, ED25519_PK_SZ);
+	if ((r = ssh_ed25519_new_pkey(&kp, 0, &key->pkey)) != 0)
+		goto out;
+#else
 	if ((key->ed25519_pk = malloc(ED25519_PK_SZ)) == NULL) {
 		error_f("malloc failed");
 		r = SSH_ERR_ALLOC_FAIL;
 		goto out;
 	}
 	memcpy(key->ed25519_pk, resp->public_key, ED25519_PK_SZ);
+#endif /* WITH_OPENSSL_V3 */
 	/* success */
 	*keyp = key;
 	key = NULL; /* transferred */

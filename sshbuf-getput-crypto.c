@@ -25,12 +25,18 @@
 
 #ifdef WITH_OPENSSL
 #include <openssl/bn.h>
+#include <openssl/err.h>
 #ifdef OPENSSL_HAS_ECC
 # include <openssl/ec.h>
 #endif /* OPENSSL_HAS_ECC */
+#if WITH_OPENSSL_V3
+#include <openssl/core_names.h>
+#include "osslv3.h"
+#endif /* WITH_OPENSSL_V3 */
 
 #include "ssherr.h"
 #include "sshbuf.h"
+#include "sshkey.h"
 
 int
 sshbuf_get_bignum2(struct sshbuf *buf, BIGNUM **valp)
@@ -55,6 +61,53 @@ sshbuf_get_bignum2(struct sshbuf *buf, BIGNUM **valp)
 	return 0;
 }
 
+int
+sshbuf_put_bignum2(struct sshbuf *buf, const BIGNUM *v)
+{
+	u_char d[SSHBUF_MAX_BIGNUM + 1];
+	int len = BN_num_bytes(v), prepend = 0, r;
+
+	if (len < 0 || len > SSHBUF_MAX_BIGNUM)
+		return SSH_ERR_INVALID_ARGUMENT;
+	*d = '\0';
+	if (BN_bn2bin(v, d + 1) != len)
+		return SSH_ERR_INTERNAL_ERROR; /* Shouldn't happen */
+	/* If MSB is set, prepend a \0 */
+	if (len > 0 && (d[1] & 0x80) != 0)
+		prepend = 1;
+	if ((r = sshbuf_put_string(buf, d + 1 - prepend, len + prepend)) < 0) {
+		explicit_bzero(d, sizeof(d));
+		return r;
+	}
+	explicit_bzero(d, sizeof(d));
+	return 0;
+}
+
+#if WITH_OPENSSL_V3
+
+int
+sshbuf_put_ec_pkey(struct sshbuf *buf, EVP_PKEY *pkey)
+{
+	struct ssh_ec_key_params kp;
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+
+	if (pkey == NULL || EVP_PKEY_get_base_id(pkey) != EVP_PKEY_EC)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	memset(&kp, 0, sizeof kp);
+	if ((r = ssh_get_ec_key_params(pkey, &kp, 0)) != 0)
+		goto out;
+
+	if ((r = sshbuf_put_string(buf, kp.pub, kp.pub_len)) != 0)
+		goto out;
+
+	r = 0;
+ out:
+	ssh_ec_key_params_deinit(&kp);
+	return r;
+}
+
+#else
 #ifdef OPENSSL_HAS_ECC
 static int
 get_ec(const u_char *d, size_t len, EC_POINT *v, const EC_GROUP *g)
@@ -125,31 +178,7 @@ sshbuf_get_eckey(struct sshbuf *buf, EC_KEY *v)
 	}
 	return 0;
 }
-#endif /* OPENSSL_HAS_ECC */
 
-int
-sshbuf_put_bignum2(struct sshbuf *buf, const BIGNUM *v)
-{
-	u_char d[SSHBUF_MAX_BIGNUM + 1];
-	int len = BN_num_bytes(v), prepend = 0, r;
-
-	if (len < 0 || len > SSHBUF_MAX_BIGNUM)
-		return SSH_ERR_INVALID_ARGUMENT;
-	*d = '\0';
-	if (BN_bn2bin(v, d + 1) != len)
-		return SSH_ERR_INTERNAL_ERROR; /* Shouldn't happen */
-	/* If MSB is set, prepend a \0 */
-	if (len > 0 && (d[1] & 0x80) != 0)
-		prepend = 1;
-	if ((r = sshbuf_put_string(buf, d + 1 - prepend, len + prepend)) < 0) {
-		explicit_bzero(d, sizeof(d));
-		return r;
-	}
-	explicit_bzero(d, sizeof(d));
-	return 0;
-}
-
-#ifdef OPENSSL_HAS_ECC
 int
 sshbuf_put_ec(struct sshbuf *buf, const EC_POINT *v, const EC_GROUP *g)
 {
@@ -187,4 +216,5 @@ sshbuf_put_ec_pkey(struct sshbuf *buf, EVP_PKEY *pkey)
 	return sshbuf_put_eckey(buf, ec);
 }
 #endif /* OPENSSL_HAS_ECC */
+#endif /* WITH_OPENSSL_V3 */
 #endif /* WITH_OPENSSL */

@@ -32,6 +32,8 @@
 /* The configuration has to fit in a monitor message along with other state */
 #define MONITOR_MAX_CFGLEN		(MONITOR_MAX_MSGLEN - (64 * 1024))
 
+#include "ssh-dh-key.h"
+
 enum mm_keytype { MM_NOKEY, MM_HOSTKEY, MM_USERKEY };
 
 struct ssh;
@@ -44,7 +46,7 @@ struct sshkey_sig_details;
 void mm_log_handler(LogLevel, int, const char *, void *);
 int mm_is_monitor(void);
 #ifdef WITH_OPENSSL
-DH *mm_choose_dh(int, int, int);
+SSH_DH_KEY *mm_choose_dh(int, int, int);
 #endif
 int mm_sshkey_sign(struct ssh *, struct sshkey *, u_char **, size_t *,
     const u_char *, size_t, const char *, const char *,

@@ -29,6 +29,7 @@
 #include "sshkey.h"
 #include "dh.h"
 #include "misc.h"
+#include "ssh-dh-key.h"
 #include "ssh2.h"
 #include "version.h"
 #include "myproposal.h"
@@ -56,7 +57,7 @@ int	mm_sshkey_sign(struct sshkey *, u_char **, u_int *,
     const u_char *, u_int, const char *, const char *, const char *, u_int);
 
 #ifdef WITH_OPENSSL
-DH	*mm_choose_dh(int, int, int);
+SSH_DH_KEY *mm_choose_dh(int, int, int);
 #endif
 
 int
@@ -74,7 +75,7 @@ mm_sshkey_sign(struct sshkey *key, u_char **sigp, u_int *lenp,
 }
 
 #ifdef WITH_OPENSSL
-DH *
+SSH_DH_KEY *
 mm_choose_dh(int min, int nbits, int max)
 {
 	return choose_dh(min, nbits, max);

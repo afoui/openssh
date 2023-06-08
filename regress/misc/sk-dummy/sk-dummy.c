@@ -37,11 +37,16 @@
 #include <openssl/ecdsa.h>
 #include <openssl/pem.h>
 
+#if WITH_OPENSSL_V3
+#include <openssl/core_names.h>
+#include "osslv3.h"
+#else
 /* Use OpenSSL SHA256 instead of libc */
 #define SHA256Init(x)		SHA256_Init(x)
 #define SHA256Update(x, y, z)	SHA256_Update(x, y, z)
 #define SHA256Final(x, y)	SHA256_Final(x, y)
 #define SHA2_CTX		SHA256_CTX
+#endif /* WITH_OPENSSL_V3 */
 
 #elif defined(HAVE_SHA2_H)
 #include <sha2.h>
@@ -86,10 +91,194 @@ sk_api_version(void)
 	return SSH_SK_VERSION_MAJOR;
 }
 
+#if WITH_OPENSSL_V3
+
+static int
+get_octet_string_param(EVP_PKEY *pkey, const char *name, unsigned char **vp, size_t *lenp)
+{
+	size_t size = 0;
+	unsigned char *v = NULL;
+	size_t len = 0;
+	int r = -1;
+
+	if (EVP_PKEY_get_octet_string_param(pkey, name, NULL, 0, &size) != 1) {
+		skdebug(__func__, "EVP_PKEY_get_octet_string_param %s", name);
+		goto out;
+	}
+
+	if ((v = malloc(size)) == NULL) {
+		skdebug(__func__, "malloc %zu", size);
+		goto out;
+	}
+
+	if (EVP_PKEY_get_octet_string_param(pkey, name, v, size, &len) != 1) {
+		skdebug(__func__, "EVP_PKEY_get_octet_string_param %s", name);
+		goto out;
+	}
+
+	*vp = v;
+	v = NULL;
+	*lenp = len;
+	len = 0;
+	r = 0;
+
+ out:
+	freezero(v, size);
+	return r;
+}
+
+#ifndef SHA256_DIGEST_LENGTH
+#define SHA256_DIGEST_LENGTH 32
+#endif
+
+static int
+sha256v(unsigned char digest[SHA256_DIGEST_LENGTH], ...)
+{
+	va_list ap;
+	EVP_MD_CTX *ctx = NULL;
+	int r = -1;
+	const unsigned char *d = NULL;
+	size_t cnt;
+	unsigned int diglen = SHA256_DIGEST_LENGTH;
+
+	va_start(ap, digest);
+	ctx = EVP_MD_CTX_new();
+	if (ctx == NULL)
+		goto out;
+
+	if (EVP_DigestInit(ctx, EVP_sha256()) != 1)
+		goto out;
+
+	for (;;) {
+		d = va_arg(ap, const unsigned char *);
+		if (d == NULL)
+			break;
+		cnt = va_arg(ap, size_t);
+		if (EVP_DigestUpdate(ctx, d, cnt) != 1)
+			goto out;
+	}
+
+	if (EVP_DigestFinal_ex(ctx, digest, &diglen) != 1)
+		goto out;
+	/* success */
+	r = 0;
+ out:
+	va_end(ap);
+	EVP_MD_CTX_free(ctx);
+	return r;
+}
+
+#else
+
+static int
+sha256v(unsigned char digest[SHA256_DIGEST_LENGTH], ...)
+{
+	va_list ap;
+	SHA2_CTX ctx;
+	const unsigned char *d = NULL;
+	size_t cnt;
+	size_t diglen = SHA256_DIGEST_LENGTH;
+
+	va_start(ap, digest);
+	SHA256Init(&ctx);
+	for (;;) {
+		d = va_arg(ap, const unsigned char *);
+		if (d == NULL)
+			break;
+		cnt = va_arg(ap, size_t);
+		SHA256Update(&ctx, d, cnt);
+	}
+
+	SHA256Final(digest, &ctx);
+	va_end(ap);
+	return 0;
+}
+
+#endif /* WITH_OPENSSL_V3 */
+
+/*
+Example output:
+
+public_key (hex):
+04:
+b8:8a:da:bd:a9:eb:2c:e8:34:48:50:40:3c:8a:37:6f:
+48:12:99:5d:ae:c0:6c:3e:08:72:35:24:c6:d5:96:dc:
+1e:5d:99:36:3f:7f:8e:c1:b7:21:b2:87:a4:25:43:2b:
+d0:7a:87:7b:01:ca:db:c7:3a:73:45:d0:8f:cb:13:46
+
+key_handle:
+-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIETVh1was8XrzmUH3WifWaeoNzmeP/8iwhIdgmNYzQbBoAoGCCqGSM49
+AwEHoUQDQgAEuIravanrLOg0SFBAPIo3b0gSmV2uwGw+CHI1JMbVltweXZk2P3+O
+wbchsoekJUMr0HqHewHK28c6c0XQj8sTRg==
+-----END EC PRIVATE KEY-----
+*/
 static int
 pack_key_ecdsa(struct sk_enroll_response *response)
 {
 #ifdef OPENSSL_HAS_ECC
+#if WITH_OPENSSL_V3
+	EVP_PKEY *pkey = NULL;
+	int ret = -1;
+	long privlen;
+	BIO *bio = NULL;
+	char *privptr;
+	unsigned char *pub = NULL;
+	size_t pub_len = 0;
+	PKCS8_PRIV_KEY_INFO *pkcs8info = NULL;
+
+	response->public_key = NULL;
+	response->public_key_len = 0;
+	response->key_handle = NULL;
+	response->key_handle_len = 0;
+
+	pkey = EVP_PKEY_Q_keygen(NULL, NULL, "EC", SN_X9_62_prime256v1);
+	if (pkey == NULL) {
+		skdebug(__func__, "EVP_PKEY_Q_keygen %s %s", "EC", SN_X9_62_prime256v1);
+		goto out;
+	}
+	if (get_octet_string_param(pkey, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, &pub, &pub_len) != 0)
+		goto out;
+	response->public_key = pub;
+	response->public_key_len = pub_len;
+	if (response->public_key[0] != POINT_CONVERSION_UNCOMPRESSED) {
+		skdebug(__func__, "public_key[0] != POINT_CONVERSION_UNCOMPRESSED");
+		goto out;
+	}
+
+	if ((pkcs8info = EVP_PKEY2PKCS8(pkey)) == NULL) {
+		skdebug(__func__, "EVP_PKEY2PKCS8");
+		goto out;
+	}
+
+	if ((bio = BIO_new(BIO_s_mem())) == NULL) {
+		skdebug(__func__, "BIO_new(BIO_s_mem())");
+		goto out;
+	}
+
+	if (PEM_write_bio_PKCS8_PRIV_KEY_INFO(bio, pkcs8info) != 1) {
+		skdebug(__func__, "PEM_write_bio_PKCS8_PRIV_KEY_INFO");
+		goto out;
+	}
+
+	if ((privlen = BIO_get_mem_data(bio, &privptr)) <= 0) {
+		skdebug(__func__, "BIO_get_mem_data failed");
+		goto out;
+	}
+	if ((response->key_handle = malloc(privlen)) == NULL) {
+		skdebug(__func__, "malloc key_handle failed");
+		goto out;
+	}
+	response->key_handle_len = (size_t)privlen;
+	memcpy(response->key_handle, privptr, response->key_handle_len);
+	/* success */
+	ret = 0;
+ out:
+	PKCS8_PRIV_KEY_INFO_free(pkcs8info);
+	BIO_free(bio);
+	EVP_PKEY_free(pkey);
+	return ret;
+#else
 	EC_KEY *key = NULL;
 	const EC_GROUP *g;
 	const EC_POINT *q;
@@ -169,6 +358,7 @@ pack_key_ecdsa(struct sk_enroll_response *response)
 	BIO_free(bio);
 	EC_KEY_free(key);
 	return ret;
+#endif /* WITH_OPENSSL_V3 */
 #else
 	return -1;
 #endif
@@ -177,6 +367,48 @@ pack_key_ecdsa(struct sk_enroll_response *response)
 static int
 pack_key_ed25519(struct sk_enroll_response *response)
 {
+#if WITH_OPENSSL_V3
+	int ret = -1;
+	EVP_PKEY *pkey = NULL;
+	struct ssh_ed25519_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	response->public_key = NULL;
+	response->public_key_len = 0;
+	response->key_handle = NULL;
+	response->key_handle_len = 0;
+
+	pkey = EVP_PKEY_Q_keygen(NULL, NULL, SN_ED25519);
+	if (pkey == NULL) {
+		skdebug(__func__, "EVP_PKEY_Q_keygen %s", SN_ED25519);
+		goto out;
+	}
+
+	if (ssh_get_ed25519_key_params(pkey, &kp, 1) != 0) {
+		skdebug(__func__, "ssh_get_ed25519_key_params");
+		goto out;
+	}
+
+	response->public_key_len = ED25519_PK_SZ;
+	if ((response->public_key = malloc(response->public_key_len)) == NULL) {
+		skdebug(__func__, "malloc pubkey failed");
+		goto out;
+	}
+	memcpy(response->public_key, &kp.sk[ED25519_SK_SZ - ED25519_PK_SZ], response->public_key_len);
+	/* Key handle contains sk */
+	response->key_handle_len = sizeof(kp.sk);
+	if ((response->key_handle = malloc(response->key_handle_len)) == NULL) {
+		skdebug(__func__, "malloc key_handle failed");
+		goto out;
+	}
+	memcpy(response->key_handle, kp.sk, sizeof(kp.sk));
+	/* success */
+	ret = 0;
+ out:
+	if (ret != 0)
+		free(response->public_key);
+	return ret;
+#else
 	int ret = -1;
 	u_char pk[crypto_sign_ed25519_PUBLICKEYBYTES];
 	u_char sk[crypto_sign_ed25519_SECRETKEYBYTES];
@@ -209,6 +441,7 @@ pack_key_ed25519(struct sk_enroll_response *response)
 	if (ret != 0)
 		free(response->public_key);
 	return ret;
+#endif /* WITH_OPENSSL_V3 */
 }
 
 static int
@@ -310,6 +543,113 @@ sig_ecdsa(const uint8_t *message, size_t message_len,
     struct sk_sign_response *response)
 {
 #ifdef OPENSSL_HAS_ECC
+#if WITH_OPENSSL_V3
+	ECDSA_SIG *sig = NULL;
+	const BIGNUM *sig_r, *sig_s;
+	int ret = -1;
+	BIO *bio = NULL;
+	EVP_PKEY *pk = NULL;
+	uint8_t apphash[SHA256_DIGEST_LENGTH];
+	uint8_t countbuf[4];
+	EVP_MD_CTX *ctx = NULL;
+	unsigned char *sigblob = NULL;
+	const unsigned char *p;
+	size_t sigbloblen = 0;
+
+	/* Decode EVP_PKEY from key handle */
+	if ((bio = BIO_new(BIO_s_mem())) == NULL ||
+	    BIO_write(bio, key_handle, key_handle_len) != (int)key_handle_len) {
+		skdebug(__func__, "BIO setup failed");
+		goto out;
+	}
+	if ((pk = PEM_read_bio_PrivateKey(bio, NULL, NULL, "")) == NULL) {
+		skdebug(__func__, "PEM_read_bio_PrivateKey failed");
+		goto out;
+	}
+	if (EVP_PKEY_get_base_id(pk) != EVP_PKEY_EC) {
+		skdebug(__func__, "Not an EC key: %d", EVP_PKEY_get_base_id(pk));
+		goto out;
+	}
+	/* Expect message to be pre-hashed */
+	if (message_len != SHA256_DIGEST_LENGTH) {
+		skdebug(__func__, "bad message len %zu", message_len);
+		goto out;
+	}
+	/* Prepare data to be signed */
+	dump("message", message, message_len);
+	sha256v(apphash, (const u_char *)application, strlen(application), NULL);
+	dump("apphash", apphash, sizeof(apphash));
+	countbuf[0] = (counter >> 24) & 0xff;
+	countbuf[1] = (counter >> 16) & 0xff;
+	countbuf[2] = (counter >> 8) & 0xff;
+	countbuf[3] = counter & 0xff;
+	dump("countbuf", countbuf, sizeof(countbuf));
+	dump("flags", &flags, sizeof(flags));
+	/* create and encode signature */
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		skdebug(__func__, "EVP_MD_CTX_new");
+		goto out;
+	}
+	if (EVP_DigestSignInit_ex(ctx, NULL, SN_sha256, NULL, NULL, pk, NULL) != 1) {
+		skdebug(__func__, "EVP_DigestSignInit_ex");
+		goto out;
+	}
+
+	if (EVP_DigestSignUpdate(ctx, apphash, sizeof apphash) != 1 ||
+	    EVP_DigestSignUpdate(ctx, &flags, sizeof(flags)) != 1 ||
+	    EVP_DigestSignUpdate(ctx, countbuf, sizeof(countbuf)) != 1 ||
+	    EVP_DigestSignUpdate(ctx, message, message_len) != 1) {
+		skdebug(__func__, "EVP_DigestSignUpdate");
+		goto out;
+	}
+
+	if (EVP_DigestSignFinal(ctx, NULL, &sigbloblen) != 1) {
+		skdebug(__func__, "EVP_DigestSignFinal");
+		goto out;
+	}
+
+	if ((sigblob = malloc(sigbloblen)) == NULL) {
+		skdebug(__func__, "malloc");
+		goto out;
+	}
+
+	if (EVP_DigestSignFinal(ctx, sigblob, &sigbloblen) != 1) {
+		skdebug(__func__, "EVP_DigestSignFinal");
+		goto out;
+	}
+
+	p = sigblob;
+	sig = d2i_ECDSA_SIG(NULL, &p, sigbloblen);
+	if (sig == NULL) {
+		skdebug(__func__, "d2i_ECDSA_SIG");
+		goto out;
+	}
+	ECDSA_SIG_get0(sig, &sig_r, &sig_s);
+	response->sig_r_len = BN_num_bytes(sig_r);
+	response->sig_s_len = BN_num_bytes(sig_s);
+	if ((response->sig_r = calloc(1, response->sig_r_len)) == NULL ||
+	    (response->sig_s = calloc(1, response->sig_s_len)) == NULL) {
+		skdebug(__func__, "calloc signature failed");
+		goto out;
+	}
+	BN_bn2bin(sig_r, response->sig_r);
+	BN_bn2bin(sig_s, response->sig_s);
+	ret = 0;
+ out:
+	EVP_MD_CTX_free(ctx);
+	explicit_bzero(&apphash, sizeof(apphash));
+	free(sigblob);
+	ECDSA_SIG_free(sig);
+	if (ret != 0) {
+		free(response->sig_r);
+		free(response->sig_s);
+		response->sig_r = NULL;
+		response->sig_s = NULL;
+	}
+	BIO_free(bio);
+	EVP_PKEY_free(pk);
+	return ret;
+#else
 	ECDSA_SIG *sig = NULL;
 	const BIGNUM *sig_r, *sig_s;
 	int ret = -1;
@@ -394,10 +734,59 @@ sig_ecdsa(const uint8_t *message, size_t message_len,
 	EC_KEY_free(ec);
 	EVP_PKEY_free(pk);
 	return ret;
+#endif /* WITH_OPENSSL_V3 */
 #else
 	return -1;
 #endif
 }
+
+#if WITH_OPENSSL_V3
+
+static int
+osslv3_sign_ed25519(
+    unsigned char *sm, unsigned long long *smlen,
+    const unsigned char *m, unsigned long long mlen,
+    const unsigned char *sk)
+{
+	int ret = -1;
+	EVP_PKEY *pkey = NULL;
+	struct ssh_ed25519_key_params kp;
+	EVP_MD_CTX *ctx = NULL;
+	size_t sigsize;
+	size_t siglen;
+
+	sigsize = *smlen;
+	memcpy(kp.sk, sk, sizeof kp.sk);
+	if (ssh_ed25519_new_pkey(&kp, 1, &pkey) != 0)
+		goto out;
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL)
+		goto out;
+
+	if (EVP_DigestSignInit_ex(ctx, NULL, NULL, NULL, NULL, pkey, NULL) != 1)
+		goto out;
+
+	if (EVP_DigestSign(ctx, NULL, &siglen, NULL, 0) != 1)
+		goto out;
+
+	if (sigsize < siglen + mlen)
+		goto out;
+
+	if (EVP_DigestSign(ctx, sm, &siglen, m, mlen) != 1)
+		goto out;
+
+	memmove(&sm[siglen], m, mlen);
+	siglen += mlen;
+
+	/* success */
+	*smlen = siglen;
+	ret = 0;
+ out:
+	ssh_ed25519_key_params_deinit(&kp);
+	EVP_PKEY_free(pkey);
+	return ret;
+}
+#endif /* WITH_OPENSSL_V3 */
 
 static int
 sig_ed25519(const uint8_t *message, size_t message_len,
@@ -405,6 +794,74 @@ sig_ed25519(const uint8_t *message, size_t message_len,
     const uint8_t *key_handle, size_t key_handle_len,
     struct sk_sign_response *response)
 {
+#if WITH_OPENSSL_V3
+	size_t o;
+	int ret = -1;
+	uint8_t apphash[SHA256_DIGEST_LENGTH];
+	uint8_t signbuf[sizeof(apphash) + sizeof(flags) +
+	    sizeof(counter) + SHA256_DIGEST_LENGTH];
+	uint8_t sig[crypto_sign_ed25519_BYTES + sizeof(signbuf)];
+	unsigned long long smlen;
+
+	if (key_handle_len != crypto_sign_ed25519_SECRETKEYBYTES) {
+		skdebug(__func__, "bad key handle length %zu", key_handle_len);
+		goto out;
+	}
+	/* Expect message to be pre-hashed */
+	if (message_len != SHA256_DIGEST_LENGTH) {
+		skdebug(__func__, "bad message len %zu", message_len);
+		goto out;
+	}
+	/* Prepare data to be signed */
+	dump("message", message, message_len);
+	sha256v(apphash, application, strlen(application), NULL);
+	dump("apphash", apphash, sizeof(apphash));
+
+	memcpy(signbuf, apphash, sizeof(apphash));
+	o = sizeof(apphash);
+	signbuf[o++] = flags;
+	signbuf[o++] = (counter >> 24) & 0xff;
+	signbuf[o++] = (counter >> 16) & 0xff;
+	signbuf[o++] = (counter >> 8) & 0xff;
+	signbuf[o++] = counter & 0xff;
+	memcpy(signbuf + o, message, message_len);
+	o += message_len;
+	if (o != sizeof(signbuf)) {
+		skdebug(__func__, "bad sign buf len %zu, expected %zu",
+		    o, sizeof(signbuf));
+		goto out;
+	}
+	dump("signbuf", signbuf, sizeof(signbuf));
+	/* create and encode signature */
+	smlen = sizeof sig;
+	if (osslv3_sign_ed25519(sig, &smlen, signbuf, sizeof(signbuf),
+	    key_handle) != 0) {
+		skdebug(__func__, "crypto_sign_ed25519 failed");
+		goto out;
+	}
+	if (smlen <= sizeof(signbuf)) {
+		skdebug(__func__, "bad sign smlen %llu, expected min %zu",
+		    smlen, sizeof(signbuf) + 1);
+		goto out;
+	}
+	response->sig_r_len = (size_t)(smlen - sizeof(signbuf));
+	if ((response->sig_r = calloc(1, response->sig_r_len)) == NULL) {
+		skdebug(__func__, "calloc signature failed");
+		goto out;
+	}
+	memcpy(response->sig_r, sig, response->sig_r_len);
+	dump("sig_r", response->sig_r, response->sig_r_len);
+	ret = 0;
+ out:
+	explicit_bzero(&apphash, sizeof(apphash));
+	explicit_bzero(&signbuf, sizeof(signbuf));
+	explicit_bzero(&sig, sizeof(sig));
+	if (ret != 0) {
+		free(response->sig_r);
+		response->sig_r = NULL;
+	}
+	return ret;
+#else
 	size_t o;
 	int ret = -1;
 	SHA2_CTX ctx;
@@ -475,6 +932,7 @@ sig_ed25519(const uint8_t *message, size_t message_len,
 		response->sig_r = NULL;
 	}
 	return ret;
+#endif /* WITH_OPENSSL_V3 */
 }
 
 int
@@ -485,7 +943,6 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 {
 	struct sk_sign_response *response = NULL;
 	int ret = SSH_SK_ERR_GENERAL;
-	SHA2_CTX ctx;
 	uint8_t message[32];
 
 	if (sign_response == NULL) {
@@ -499,9 +956,8 @@ sk_sign(uint32_t alg, const uint8_t *data, size_t datalen,
 		skdebug(__func__, "calloc response failed");
 		goto out;
 	}
-	SHA256Init(&ctx);
-	SHA256Update(&ctx, data, datalen);
-	SHA256Final(message, &ctx);
+	if (sha256v(message, data, datalen, NULL) != 0)
+		goto out;
 	response->flags = flags;
 	response->counter = 0x12345678;
 	switch(alg) {

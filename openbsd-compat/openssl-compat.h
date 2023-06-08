@@ -84,11 +84,6 @@ int EVP_CIPHER_CTX_get_iv(const EVP_CIPHER_CTX *ctx,
 # endif /* HAVE_EVP_CIPHER_CTX_GET_UPDATED_IV */
 #endif /* HAVE_EVP_CIPHER_CTX_GET_IV */
 
-#ifndef HAVE_EVP_CIPHER_CTX_SET_IV
-int EVP_CIPHER_CTX_set_iv(EVP_CIPHER_CTX *ctx,
-    const unsigned char *iv, size_t len);
-#endif /* HAVE_EVP_CIPHER_CTX_SET_IV */
-
 #ifndef HAVE_EVP_DIGESTSIGN
 int EVP_DigestSign(EVP_MD_CTX *, unsigned char *, size_t *,
     const unsigned char *, size_t);

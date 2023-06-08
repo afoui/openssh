@@ -588,7 +588,8 @@ main(int ac, char **av)
 	if (!rexeced_flag)
 		fatal("sshd-auth should not be executed directly");
 
-#ifdef WITH_OPENSSL
+// FIXME: check for function/macro in configure
+#ifdef OpenSSL_add_all_algorithms
 	OpenSSL_add_all_algorithms();
 #endif
 

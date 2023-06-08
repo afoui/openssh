@@ -26,9 +26,11 @@
 #ifndef SSHKEY_H
 #define SSHKEY_H
 
+#include <stdint.h>
 #include <sys/types.h>
 
 #ifdef WITH_OPENSSL
+#include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/evp.h>
 # ifdef OPENSSL_HAS_ECC
@@ -121,9 +123,11 @@ struct sshkey {
 	int	 ecdsa_nid;	/* NID of curve */
 	/* libcrypto-backed keys */
 	EVP_PKEY *pkey;
+#if !WITH_OPENSSL_V3
 	/* KEY_ED25519 and KEY_ED25519_SK */
 	u_char	*ed25519_sk;
 	u_char	*ed25519_pk;
+#endif /* !WITH_OPENSSL_V3 */
 	/* KEY_ECDSA_SK and KEY_ED25519_SK */
 	char	*sk_application;
 	uint8_t	sk_flags;
@@ -138,8 +142,12 @@ struct sshkey {
 	size_t	shield_prekey_len;
 };
 
+#ifndef ED25519_SK_SZ
 #define	ED25519_SK_SZ	crypto_sign_ed25519_SECRETKEYBYTES
+#endif /* ED25519_SK_SZ */
+#ifndef ED25519_PK_SZ
 #define	ED25519_PK_SZ	crypto_sign_ed25519_PUBLICKEYBYTES
+#endif /* ED25519_PK_SZ */
 
 /* Additional fields contained in signature */
 struct sshkey_sig_details {
@@ -242,11 +250,15 @@ int		 sshkey_curve_name_to_nid(const char *);
 const char *	 sshkey_curve_nid_to_name(int);
 u_int		 sshkey_curve_nid_to_bits(int);
 int		 sshkey_ecdsa_bits_to_nid(int);
+#if !WITH_OPENSSL_V3
 int		 sshkey_ecdsa_key_to_nid(const EC_KEY *);
+#endif
 int		 sshkey_ecdsa_pkey_to_nid(EVP_PKEY *);
 int		 sshkey_ec_nid_to_hash_alg(int nid);
+#if !WITH_OPENSSL_V3
 int		 sshkey_ec_validate_public(const EC_GROUP *, const EC_POINT *);
 int		 sshkey_ec_validate_private(const EC_KEY *);
+#endif
 const char	*sshkey_ssh_name(const struct sshkey *);
 const char	*sshkey_ssh_name_plain(const struct sshkey *);
 int		 sshkey_names_valid2(const char *, int, int);
@@ -278,8 +290,12 @@ int	sshkey_pkey_digest_verify(EVP_PKEY *, int, const u_char *,
     size_t, u_char *, size_t);
 
 /* for debug */
+#if WITH_OPENSSL_V3
+void	sshkey_dump_ec_private_key(EVP_PKEY *);
+#else
 void	sshkey_dump_ec_point(const EC_GROUP *, const EC_POINT *);
 void	sshkey_dump_ec_key(const EC_KEY *);
+#endif /* WITH_OPENSSL_V3 */
 
 /* private key parsing and serialisation */
 int	sshkey_private_serialize(struct sshkey *key, struct sshbuf *buf);
@@ -305,9 +321,11 @@ int	ssh_ecdsa_encode_store_sig(const struct sshkey *,
 	    const BIGNUM *, const BIGNUM *, u_char **, size_t *);
 int	ssh_ed25519_encode_store_sig(const u_char *, size_t,
 	    u_char **, size_t *);
+#if !WITH_OPENSSL_V3
 /* XXX should be internal, but used by ssh-keygen */
 int ssh_rsa_complete_crt_parameters(const BIGNUM *, const BIGNUM *,
     const BIGNUM *, const BIGNUM *, BIGNUM **, BIGNUM **);
+#endif
 
 void	 sshkey_sig_details_free(struct sshkey_sig_details *);
 
@@ -324,7 +342,7 @@ int	sshkey_deserialize_sk(struct sshbuf *b, struct sshkey *key);
 int	sshkey_serialize_private_sk(const struct sshkey *key,
     struct sshbuf *buf);
 int	sshkey_private_deserialize_sk(struct sshbuf *buf, struct sshkey *k);
-#ifdef WITH_OPENSSL
+#if defined(WITH_OPENSSL) && !WITH_OPENSSL_V3
 int	check_rsa_length(const RSA *rsa); /* XXX remove */
 #endif
 #endif

@@ -113,7 +113,7 @@ mac_setup_by_alg(struct sshmac *mac, const struct macalg *macalg)
 }
 
 int
-mac_setup(struct sshmac *mac, char *name)
+mac_setup(struct sshmac *mac, const char *name)
 {
 	const struct macalg *m;
 
@@ -218,13 +218,18 @@ mac_check(struct sshmac *mac, u_int32_t seqno,
 void
 mac_clear(struct sshmac *mac)
 {
-	if (mac->type == SSH_UMAC) {
-		if (mac->umac_ctx != NULL)
+	if (mac->umac_ctx != NULL) {
+		switch (mac->type) {
+		case SSH_UMAC:
 			umac_delete(mac->umac_ctx);
-	} else if (mac->type == SSH_UMAC128) {
-		if (mac->umac_ctx != NULL)
+			break;
+
+		case SSH_UMAC128:
 			umac128_delete(mac->umac_ctx);
-	} else if (mac->hmac_ctx != NULL)
+			break;
+		}
+	}
+	if (mac->hmac_ctx != NULL)
 		ssh_hmac_free(mac->hmac_ctx);
 	mac->hmac_ctx = NULL;
 	mac->umac_ctx = NULL;

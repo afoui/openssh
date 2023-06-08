@@ -43,6 +43,242 @@
 #include "digest.h"
 #include "ssherr.h"
 
+#if WITH_OPENSSL_V3
+
+#include "osslv3.h"
+
+static int
+generate_ec_pkey_from_nid(int nid, EVP_PKEY **pkeyp)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	const char *group_name = NULL;
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+
+	if ((group_name = OBJ_nid2sn(nid)) == NULL) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+	if (ctx == NULL)
+		goto out;
+
+	if (EVP_PKEY_keygen_init(ctx) != 1)
+		goto out;
+
+	if (EVP_PKEY_CTX_set_group_name(ctx, group_name) != 1)
+		goto out;
+
+	if (EVP_PKEY_generate(ctx, pkeyp) != 1)
+		goto out;
+
+	r = 0;
+
+ out:
+	EVP_PKEY_CTX_free(ctx);
+	return r;
+}
+
+int
+kex_ecdh_keypair(struct kex *kex)
+{
+	EVP_PKEY *client_key = NULL;
+	struct sshbuf *buf = NULL;
+	int r;
+
+	if ((r = generate_ec_pkey_from_nid(kex->ec_nid, &client_key)) != 0)
+		goto out;
+
+	if ((buf = sshbuf_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if ((r = sshbuf_put_ec_pkey(buf, client_key)) != 0)
+		goto out;
+
+	if ((r = sshbuf_get_u32(buf, NULL)) != 0)
+		goto out;
+#ifdef DEBUG_KEXECDH
+	fputs("client private key:\n", stderr);
+	EVP_PKEY_print_private_fp(stderr, client_key, 8, NULL);
+#endif
+	kex->client_pkey = client_key;
+	client_key = NULL;	/* owned by the kex */
+	kex->client_pub = buf;
+	buf = NULL;
+	r = 0;
+ out:
+	EVP_PKEY_free(client_key);
+	sshbuf_free(buf);
+	return r;
+}
+
+static int
+derive_secret(EVP_PKEY *host_key, EVP_PKEY *pub_key, struct sshbuf *shared_secret)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+	size_t sslen = 0;
+	unsigned char *ss = NULL;
+	BIGNUM *ssbn = NULL;
+
+	if ((ctx = EVP_PKEY_CTX_new_from_pkey(NULL, host_key, NULL)) == NULL)
+		goto out;
+
+	if (EVP_PKEY_derive_init(ctx) != 1)
+		goto out;
+
+	if (EVP_PKEY_derive_set_peer(ctx, pub_key) != 1)
+		goto out;
+
+	if (EVP_PKEY_derive(ctx, NULL, &sslen) != 1)
+		goto out;
+
+	if ((ss = OPENSSL_malloc(sslen)) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (EVP_PKEY_derive(ctx, ss, &sslen) != 1)
+		goto out;
+
+#ifdef DEBUG_KEXECDH
+	dump_digest("shared secret", ss, sslen);
+#endif
+
+	if ((ssbn = BN_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (BN_bin2bn(ss, sslen, ssbn) == NULL)
+		goto out;
+
+	r = sshbuf_put_bignum2(shared_secret, ssbn);
+
+ out:
+	OPENSSL_clear_free(ss, sslen);
+	BN_clear_free(ssbn);
+	EVP_PKEY_CTX_free(ctx);
+	return r;
+}
+
+static int
+kex_ecdh_dec_key(struct kex *kex, const struct sshbuf *ec_blob,
+    EVP_PKEY *pkey, struct sshbuf **shared_secretp)
+{
+	struct ssh_ec_key_params kp;
+	struct sshbuf *buf = NULL;
+	int r;
+	u_char *pub_key_bytes = NULL;
+	size_t pub_key_len = 0;
+	EVP_PKEY *pub_key = NULL;
+	int nid;
+
+	*shared_secretp = NULL;
+
+	memset(&kp, 0, sizeof kp);
+	if ((buf = sshbuf_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshbuf_put_stringb(buf, ec_blob)) != 0)
+		goto out;
+
+	if ((r = sshbuf_get_string(buf, &pub_key_bytes, &pub_key_len)) != 0)
+		goto out;
+
+	kp.pub = pub_key_bytes;
+	kp.pub_len = pub_key_len;
+	if ((nid = sshkey_ecdsa_pkey_to_nid(pkey)) < 0)
+		goto out;
+
+	kp.curve_nid = nid;
+	kp.exponent = NULL;
+	if ((r = ssh_ec_new_pkey(&kp, &pub_key)) != 0)
+		goto out;
+
+	sshbuf_reset(buf);
+
+#ifdef DEBUG_KEXECDH
+	fputs("public key:\n", stderr);
+	EVP_PKEY_print_public_fp(stderr, pub_key, 8, NULL);
+#endif
+
+	r = derive_secret(pkey, pub_key, buf);
+	if (r != 0)
+		goto out;
+
+	*shared_secretp = buf;
+	buf = NULL;
+
+ out:
+	ssh_ec_key_params_deinit(&kp);
+	EVP_PKEY_free(pub_key);
+	sshbuf_free(buf);
+	return r;
+}
+
+int
+kex_ecdh_enc(struct kex *kex, const struct sshbuf *client_blob,
+    struct sshbuf **server_blobp, struct sshbuf **shared_secretp)
+{
+	EVP_PKEY *server_key = NULL;
+	struct sshbuf *server_blob = NULL;
+	struct sshbuf *shared_secret = NULL;
+	int r;
+
+	*server_blobp = NULL;
+	*shared_secretp = NULL;
+
+	if ((r = generate_ec_pkey_from_nid(kex->ec_nid, &server_key)) != 0)
+		goto out;
+
+#ifdef DEBUG_KEXECDH
+	fputs("server private key:\n", stderr);
+	EVP_PKEY_print_private_fp(stderr, server_key, 8, NULL);
+#endif
+
+	if ((server_blob = sshbuf_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if ((r = sshbuf_put_ec_pkey(server_blob, server_key)) != 0)
+		goto out;
+
+	if ((r = sshbuf_get_u32(server_blob, NULL)) != 0)
+		goto out;
+
+	if ((r = kex_ecdh_dec_key(kex, client_blob, server_key, &shared_secret)) != 0)
+		goto out;
+
+	*server_blobp = server_blob;
+	server_blob = NULL;
+	*shared_secretp = shared_secret;
+	shared_secret = NULL;
+
+	r = 0;
+ out:
+	EVP_PKEY_free(server_key);
+	sshbuf_free(server_blob);
+	sshbuf_free(shared_secret);
+	return r;
+}
+
+int
+kex_ecdh_dec(struct kex *kex, const struct sshbuf *server_blob,
+    struct sshbuf **shared_secretp)
+{
+	int r;
+
+	r = kex_ecdh_dec_key(kex, server_blob, kex->client_pkey, shared_secretp);
+	EVP_PKEY_free(kex->client_pkey);
+	kex->client_pkey = NULL;
+	return r;
+}
+#else
 static int
 kex_ecdh_dec_key_group(struct kex *, const struct sshbuf *, EC_KEY *key,
     const EC_GROUP *, struct sshbuf **);
@@ -210,6 +446,7 @@ kex_ecdh_dec(struct kex *kex, const struct sshbuf *server_blob,
 	return r;
 }
 
+#endif /* WITH_OPENSSL_V3 */
 #else
 
 #include "ssherr.h"

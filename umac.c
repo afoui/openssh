@@ -86,6 +86,7 @@
 #include "umac.h"
 #include "misc.h"
 
+
 /* ---------------------------------------------------------------------- */
 /* --- Primitive Data Types ---                                           */
 /* ---------------------------------------------------------------------- */
@@ -163,11 +164,39 @@ typedef unsigned int	UWORD;  /* Register */
 #ifndef USE_BUILTIN_RIJNDAEL
 # include <openssl/aes.h>
 #endif
+#if WITH_OPENSSL_V3
+typedef EVP_CIPHER_CTX *aes_int_key[1];
+
+static void aes_encryption(const unsigned char *in, unsigned char *out, aes_int_key key)
+{
+    int outlen;
+    EVP_EncryptUpdate(key[0], out, &outlen, in, AES_BLOCK_SIZE);
+}
+
+static void aes_key_setup(const unsigned char *key, aes_int_key int_key)
+{
+    EVP_CIPHER_CTX *ctx = NULL;
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_CIPHER_CTX_set_padding(ctx, 0);
+    EVP_EncryptInit_ex(ctx, EVP_aes_128_ecb(), NULL, key, NULL);
+    int_key[0] = ctx;
+}
+
+static void aes_key_cleanup(aes_int_key key)
+{
+    EVP_CIPHER_CTX_free(key[0]);
+    key[0] = NULL;
+}
+
+#else
 typedef AES_KEY aes_int_key[1];
 #define aes_encryption(in,out,int_key)                  \
   AES_encrypt((u_char *)(in),(u_char *)(out),(AES_KEY *)int_key)
 #define aes_key_setup(key,int_key)                      \
   AES_set_encrypt_key((const u_char *)(key),UMAC_KEY_LEN*8,int_key)
+#define aes_key_cleanup(int_key) \
+  explicit_bzero(int_key, sizeof int_key)
+#endif /* WITH_OPENSSL_V3 */
 #else
 #include "rijndael.h"
 #define AES_ROUNDS ((UMAC_KEY_LEN / 4) + 6)
@@ -177,6 +206,8 @@ typedef UINT8 aes_int_key[AES_ROUNDS+1][4][4];	/* AES internal */
 #define aes_key_setup(key,int_key) \
   rijndaelKeySetupEnc((u32 *)(int_key), (const unsigned char *)(key), \
   UMAC_KEY_LEN*8)
+#define aes_key_cleanup(int_key) \
+  explicit_bzero(int_key, sizeof int_key)
 #endif
 
 /* The user-supplied UMAC key is stretched using AES in a counter
@@ -1022,6 +1053,7 @@ static uhash_ctx_t uhash_alloc(u_char key[])
         }
         aes_key_setup(key,prf_key);
         uhash_init(ctx, prf_key);
+        aes_key_cleanup(prf_key);
     }
     return (ctx);
 }
@@ -1207,6 +1239,7 @@ int umac_delete(struct umac_ctx *ctx)
 /* Deallocate the ctx structure */
 {
     if (ctx) {
+        aes_key_cleanup(ctx->pdf.prf_key);
         if (ALLOC_BOUNDARY)
             ctx = (struct umac_ctx *)ctx->free_ptr;
         freezero(ctx, sizeof(*ctx) + ALLOC_BOUNDARY);
@@ -1236,7 +1269,7 @@ struct umac_ctx *umac_new(const u_char key[])
         aes_key_setup(key, prf_key);
         pdf_init(&ctx->pdf, prf_key);
         uhash_init(&ctx->hash, prf_key);
-        explicit_bzero(prf_key, sizeof(prf_key));
+        aes_key_cleanup(prf_key);
     }
 
     return (ctx);
@@ -1284,3 +1317,4 @@ int umac(struct umac_ctx *ctx, u_char *input,
 /* ----- End UMAC Section ----------------------------------------------- */
 /* ---------------------------------------------------------------------- */
 /* ---------------------------------------------------------------------- */
+

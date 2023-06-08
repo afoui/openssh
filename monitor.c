@@ -663,8 +663,9 @@ mm_answer_state(struct ssh *ssh, int sock, struct sshbuf *unused)
 int
 mm_answer_moduli(struct ssh *ssh, int sock, struct sshbuf *m)
 {
-	DH *dh;
-	const BIGNUM *dh_p, *dh_g;
+	SSH_DH_KEY *dh;
+	BIGNUM *dh_p = NULL;
+	BIGNUM *dh_g = NULL;
 	int r;
 	u_int min, want, max;
 
@@ -687,13 +688,17 @@ mm_answer_moduli(struct ssh *ssh, int sock, struct sshbuf *m)
 		return (0);
 	} else {
 		/* Send first bignum */
-		DH_get0_pqg(dh, &dh_p, NULL, &dh_g);
+		if ((r = ssh_dh_key_get_pg(dh, &dh_p, &dh_g)) != 0)
+			fatal_fr(r, "get pg");
+
 		if ((r = sshbuf_put_u8(m, 1)) != 0 ||
 		    (r = sshbuf_put_bignum2(m, dh_p)) != 0 ||
 		    (r = sshbuf_put_bignum2(m, dh_g)) != 0)
 			fatal_fr(r, "assemble");
 
-		DH_free(dh);
+		BN_clear_free(dh_p);
+		BN_clear_free(dh_g);
+		dh_free(dh);
 	}
 	mm_request_send(sock, MONITOR_ANS_MODULI, m);
 	return (0);
@@ -2070,4 +2075,3 @@ mm_answer_gss_userok(struct ssh *ssh, int sock, struct sshbuf *m)
 	return (authenticated);
 }
 #endif /* GSSAPI */
-

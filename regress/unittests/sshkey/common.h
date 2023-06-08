@@ -15,8 +15,11 @@ struct sshbuf *load_text_file(const char *name);
 BIGNUM *load_bignum(const char *name);
 
 /* Accessors for key components */
-const BIGNUM *rsa_n(struct sshkey *k);
-const BIGNUM *rsa_e(struct sshkey *k);
-const BIGNUM *rsa_p(struct sshkey *k);
-const BIGNUM *rsa_q(struct sshkey *k);
-
+BIGNUM *rsa_n(struct sshkey *k);
+BIGNUM *rsa_e(struct sshkey *k);
+BIGNUM *rsa_p(struct sshkey *k);
+BIGNUM *rsa_q(struct sshkey *k);
+#ifdef OPENSSL_HAS_ECC
+BIGNUM *ec_pub_key(struct sshkey *k);
+BIGNUM *ec_priv_key(struct sshkey *k);
+#endif /* OPENSSL_HAS_ECC */

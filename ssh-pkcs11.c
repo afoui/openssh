@@ -19,6 +19,9 @@
 #include "includes.h"
 
 #ifdef ENABLE_PKCS11
+#if WITH_OPENSSL_V3
+#error "Not supported yet"
+#else
 
 #include <sys/time.h>
 
@@ -2281,6 +2284,7 @@ out:
 	return (k);
 }
 #endif /* WITH_PKCS11_KEYGEN */
+#endif /* WITH_OPENSSL_V3 */
 #else /* ENABLE_PKCS11 */
 
 #include <sys/types.h>

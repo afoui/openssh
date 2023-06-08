@@ -16,6 +16,7 @@
 #ifdef WITH_OPENSSL
 #include <openssl/bn.h>
 #include <openssl/rsa.h>
+#include <openssl/evp.h>
 #if defined(OPENSSL_HAS_ECC) && defined(OPENSSL_HAS_NISTP256)
 # include <openssl/ec.h>
 #endif
@@ -31,6 +32,56 @@
 #include "authfile.h"
 #include "common.h"
 #include "ssh2.h"
+
+#if WITH_OPENSSL_V3
+
+static int
+has_ed25519_sk(struct sshkey *k)
+{
+	int r = 0;
+	unsigned char sk[32];
+	size_t sklen = sizeof sk;
+	if (k->pkey == NULL)
+		goto out;
+	if (EVP_PKEY_get_raw_private_key(k->pkey, sk, &sklen) != 1)
+		goto out;
+	ASSERT_INT_EQ(sklen, 32);
+	r = 1;
+ out:
+	return r;
+}
+
+static int
+has_ed25519_pk(struct sshkey *k)
+{
+	int r = 0;
+	unsigned char pk[32];
+	size_t pklen = sizeof pk;
+	if (k->pkey == NULL)
+		goto out;
+	if (EVP_PKEY_get_raw_public_key(k->pkey, pk, &pklen) != 1)
+		goto out;
+	ASSERT_INT_EQ(pklen, 32);
+	r = 1;
+ out:
+	return r;
+}
+
+#else
+
+static int
+has_ed25519_sk(struct sshkey *k)
+{
+	return k->ed25519_sk != NULL ? 1 : 0;
+}
+
+static int
+has_ed25519_pk(struct sshkey *k)
+{
+	return k->ed25519_pk != NULL ? 1 : 0;
+}
+
+#endif /* WITH_OPENSSL_V3 */
 
 void sshkey_tests(void);
 void sshkey_benchmarks(void);
@@ -243,8 +294,13 @@ sshkey_tests(void)
 	struct sshkey *k1 = NULL, *k2 = NULL, *k3 = NULL, *kf = NULL;
 #ifdef WITH_OPENSSL
 	struct sshkey *k4 = NULL, *kr = NULL, *kd = NULL;
+	BIGNUM *kr_n = NULL, *kr_e = NULL, *kr_p = NULL;
+	BIGNUM *kd_g = NULL, *kd_priv_key = NULL;
+	BIGNUM *k1_g = NULL, *k1_priv_key = NULL;
+	BIGNUM *k1_n = NULL, *k1_e = NULL, *k1_p = NULL;
 #ifdef OPENSSL_HAS_ECC
 	struct sshkey *ke = NULL;
+	BIGNUM *ke_pub_key = NULL, *ke_priv_key = NULL;
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
 	struct sshbuf *b = NULL;
@@ -270,7 +326,6 @@ sshkey_tests(void)
 	k1 = NULL;
 	TEST_DONE();
 
-
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("new/free KEY_ECDSA");
 	k1 = sshkey_new(KEY_ECDSA);
@@ -285,8 +340,8 @@ sshkey_tests(void)
 	k1 = sshkey_new(KEY_ED25519);
 	ASSERT_PTR_NE(k1, NULL);
 	/* These should be blank until key loaded or generated */
-	ASSERT_PTR_EQ(k1->ed25519_sk, NULL);
-	ASSERT_PTR_EQ(k1->ed25519_pk, NULL);
+	ASSERT_INT_EQ(has_ed25519_sk(k1), 0);
+	ASSERT_INT_EQ(has_ed25519_pk(k1), 0);
 	sshkey_free(k1);
 	k1 = NULL;
 	TEST_DONE();
@@ -317,25 +372,32 @@ sshkey_tests(void)
 	TEST_START("generate KEY_RSA");
 	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 767, &kr),
 	    SSH_ERR_KEY_LENGTH);
-	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 1024, &kr), 0);
+	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 3072, &kr), 0);
 	ASSERT_PTR_NE(kr, NULL);
-	ASSERT_PTR_NE(EVP_PKEY_get0_RSA(kr->pkey), NULL);
-	ASSERT_PTR_NE(rsa_n(kr), NULL);
-	ASSERT_PTR_NE(rsa_e(kr), NULL);
-	ASSERT_PTR_NE(rsa_p(kr), NULL);
-	ASSERT_INT_EQ(BN_num_bits(rsa_n(kr)), 1024);
+	ASSERT_PTR_NE(kr->pkey, NULL);
+	kr_n = rsa_n(kr);
+	kr_e = rsa_e(kr);
+	kr_p = rsa_p(kr);
+	ASSERT_PTR_NE(kr_n, NULL);
+	ASSERT_PTR_NE(kr_e, NULL);
+	ASSERT_PTR_NE(kr_p, NULL);
+	ASSERT_INT_EQ(BN_num_bits(rsa_n(kr)), 3072);
+	BN_free(kr_n);
+	BN_free(kr_e);
+	BN_free(kr_p);
 	TEST_DONE();
-
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("generate KEY_ECDSA");
 	ASSERT_INT_EQ(sshkey_generate(KEY_ECDSA, 256, &ke), 0);
 	ASSERT_PTR_NE(ke, NULL);
-	ASSERT_PTR_NE(EVP_PKEY_get0_EC_KEY(ke->pkey), NULL);
-	ASSERT_PTR_NE(EC_KEY_get0_public_key(EVP_PKEY_get0_EC_KEY(ke->pkey)),
-	    NULL);
-	ASSERT_PTR_NE(EC_KEY_get0_private_key(EVP_PKEY_get0_EC_KEY(ke->pkey)),
-	    NULL);
+	ASSERT_PTR_NE(ke->pkey, NULL);
+	ke_pub_key = ec_pub_key(ke);
+	ke_priv_key = ec_priv_key(ke);
+	ASSERT_PTR_NE(ke_pub_key, NULL);
+	ASSERT_PTR_NE(ke_priv_key, NULL);
+	BN_free(ke_pub_key);
+	BN_free(ke_priv_key);
 	TEST_DONE();
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
@@ -344,8 +406,8 @@ sshkey_tests(void)
 	ASSERT_INT_EQ(sshkey_generate(KEY_ED25519, 256, &kf), 0);
 	ASSERT_PTR_NE(kf, NULL);
 	ASSERT_INT_EQ(kf->type, KEY_ED25519);
-	ASSERT_PTR_NE(kf->ed25519_pk, NULL);
-	ASSERT_PTR_NE(kf->ed25519_sk, NULL);
+	ASSERT_INT_NE(has_ed25519_sk(kf), 0);
+	ASSERT_INT_NE(has_ed25519_pk(kf), 0);
 	TEST_DONE();
 
 #ifdef WITH_OPENSSL
@@ -354,10 +416,16 @@ sshkey_tests(void)
 	ASSERT_PTR_NE(k1, NULL);
 	ASSERT_PTR_NE(kr, k1);
 	ASSERT_INT_EQ(k1->type, KEY_RSA);
-	ASSERT_PTR_NE(EVP_PKEY_get0_RSA(k1->pkey), NULL);
-	ASSERT_PTR_NE(rsa_n(k1), NULL);
-	ASSERT_PTR_NE(rsa_e(k1), NULL);
-	ASSERT_PTR_EQ(rsa_p(k1), NULL);
+	ASSERT_PTR_NE(k1->pkey, NULL);
+	k1_n = rsa_n(k1);
+	k1_e = rsa_e(k1);
+	k1_p = rsa_p(k1);
+	ASSERT_PTR_NE(k1_n, NULL);
+	ASSERT_PTR_NE(k1_e, NULL);
+	ASSERT_PTR_EQ(k1_p, NULL);
+	BN_free(k1_n);
+	BN_free(k1_e);
+	BN_free(k1_p);
 	TEST_DONE();
 
 	TEST_START("equal KEY_RSA/demoted KEY_RSA");
@@ -366,19 +434,20 @@ sshkey_tests(void)
 	k1 = NULL;
 	TEST_DONE();
 
-
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("demote KEY_ECDSA");
 	ASSERT_INT_EQ(sshkey_from_private(ke, &k1), 0);
 	ASSERT_PTR_NE(k1, NULL);
 	ASSERT_PTR_NE(ke, k1);
 	ASSERT_INT_EQ(k1->type, KEY_ECDSA);
-	ASSERT_PTR_NE(EVP_PKEY_get0_EC_KEY(k1->pkey), NULL);
+	ASSERT_PTR_NE(k1->pkey, NULL);
 	ASSERT_INT_EQ(k1->ecdsa_nid, ke->ecdsa_nid);
-	ASSERT_PTR_NE(EC_KEY_get0_public_key(EVP_PKEY_get0_EC_KEY(ke->pkey)),
-	   NULL);
-	ASSERT_PTR_EQ(EC_KEY_get0_private_key(EVP_PKEY_get0_EC_KEY(k1->pkey)),
-	   NULL);
+	ke_pub_key = ec_pub_key(ke);
+	k1_priv_key = ec_priv_key(k1);
+	ASSERT_PTR_NE(ke_pub_key, NULL);
+	ASSERT_PTR_EQ(k1_priv_key, NULL);
+	BN_free(ke_pub_key);
+	BN_free(k1_priv_key);
 	TEST_DONE();
 
 	TEST_START("equal KEY_ECDSA/demoted KEY_ECDSA");
@@ -394,8 +463,8 @@ sshkey_tests(void)
 	ASSERT_PTR_NE(k1, NULL);
 	ASSERT_PTR_NE(kf, k1);
 	ASSERT_INT_EQ(k1->type, KEY_ED25519);
-	ASSERT_PTR_NE(k1->ed25519_pk, NULL);
-	ASSERT_PTR_EQ(k1->ed25519_sk, NULL);
+	ASSERT_INT_NE(has_ed25519_pk(k1), 0);
+	ASSERT_INT_EQ(has_ed25519_sk(k1), 0);
 	TEST_DONE();
 
 	TEST_START("equal KEY_ED25519/demoted KEY_ED25519");

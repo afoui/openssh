@@ -36,6 +36,9 @@
 #include <openssl/ec.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
+# if WITH_OPENSSL_V3
+# include <openssl/core_names.h>
+# endif
 #endif
 
 #include <string.h>
@@ -229,6 +232,91 @@ webauthn_check_prepare_hash(const u_char *data, size_t datalen,
 	sshbuf_free(m);
 	return r;
 }
+
+#if 0 // TODO: remove?
+#if WITH_OPENSSL_V3
+
+static int
+ecdsa_verify_signature(const struct sshbuf *original_signed,
+    const ECDSA_SIG *esig,
+    const struct sshkey *key)
+{
+	int ret;
+	int sigbloblen = 0;
+	unsigned char *sigblob = NULL;
+	EVP_MD_CTX *ctx = NULL;
+	const char *mdname = OSSL_DIGEST_NAME_SHA2_256;
+	const u_char *data = sshbuf_ptr(original_signed);
+	size_t dlen = sshbuf_len(original_signed);
+
+	sigbloblen = i2d_ECDSA_SIG(esig, &sigblob);
+	if (sigbloblen <= 0) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerifyInit_ex(ctx, NULL, mdname, NULL, NULL, key->pkey, NULL) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerify(ctx, sigblob, sigbloblen, data, dlen) != 1) {
+		ret = SSH_ERR_SIGNATURE_INVALID;
+		goto out;
+	}
+
+	ret = 0;
+
+ out:
+	EVP_MD_CTX_free(ctx);
+	OPENSSL_clear_free(sigblob, sigbloblen);
+	return ret;
+}
+
+#else
+
+static int
+ecdsa_verify_signature(const struct sshbuf *original_signed,
+    const ECDSA_SIG *esig,
+    const struct sshkey *key)
+{
+	int ret;
+	u_char sighash[32];
+
+	/* Signature is over H(original_signed) */
+	if ((ret = ssh_digest_buffer(SSH_DIGEST_SHA256, original_signed,
+	    sighash, sizeof(sighash))) != 0)
+		goto out;
+
+#ifdef DEBUG_SK
+	fprintf(stderr, "%s: signed hash:\n", __func__);
+	sshbuf_dump_data(sighash, sizeof(sighash), stderr);
+#endif
+
+	switch (ECDSA_do_verify(sighash, sizeof(sighash), esig, key->ecdsa)) {
+	case 1:
+		ret = 0;
+		break;
+	case 0:
+		ret = SSH_ERR_SIGNATURE_INVALID;
+		break;
+	default:
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		break;
+	}
+
+ out:
+	explicit_bzero(sighash, sizeof(sighash));
+	return ret;
+}
+
+#endif /* WITH_OPENSSL_V3 */
+#endif // 0 // TODO: remove?
 
 static int
 ssh_ecdsa_sk_verify(const struct sshkey *key,

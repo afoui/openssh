@@ -54,8 +54,17 @@ check()
 	done
 }
 
-check 3072 3des-cbc  # 112 bits.
-check 3072 `${SSH} -Q cipher | grep 128`
-check 7680 `${SSH} -Q cipher | grep 192`
+have_umac=false
+if [ -n "`${SSH} -Q mac | grep umac-64`" ]; then
+	have_umac=true
+fi
+
+# bits < 8192 only possible with umac-64
+if $have_umac; then
+	check 3072 3des-cbc  # 112 bits.
+	check 3072 `${SSH} -Q cipher | grep 128`
+	check 7680 `${SSH} -Q cipher | grep 192`
+fi
+
 check 8192 `${SSH} -Q cipher | grep 256`
 check 8192 chacha20-poly1305@openssh.com

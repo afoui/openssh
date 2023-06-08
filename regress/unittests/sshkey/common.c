@@ -20,9 +20,14 @@
 #include <openssl/bn.h>
 #include <openssl/rsa.h>
 #include <openssl/objects.h>
-#ifdef OPENSSL_HAS_NISTP256
+#if WITH_OPENSSL_V3
+# include <openssl/core_names.h>
+# include <openssl/evp.h>
+#else
+#ifdef OPENSSL_HAS_ECC
 # include <openssl/ec.h>
-#endif /* OPENSSL_HAS_NISTP256 */
+#endif /* OPENSSL_HAS_ECC */
+#endif /* WITH_OPENSSL_V3 */
 #endif /* WITH_OPENSSL */
 
 #include "openbsd-compat/openssl-compat.h"
@@ -80,47 +85,109 @@ load_bignum(const char *name)
 	return ret;
 }
 
-const BIGNUM *
+BIGNUM *
 rsa_n(struct sshkey *k)
 {
-	const BIGNUM *n = NULL;
+#if WITH_OPENSSL_V3
+	BIGNUM *n = NULL;
 
+	ASSERT_INT_EQ(EVP_PKEY_get_bn_param(k->pkey, OSSL_PKEY_PARAM_RSA_N, &n), 1);
+	return n;
+#else
 	ASSERT_PTR_NE(k, NULL);
 	ASSERT_PTR_NE(k->pkey, NULL);
 	RSA_get0_key(EVP_PKEY_get0_RSA(k->pkey), &n, NULL, NULL);
-	return n;
+	return BN_dup(n);
+#endif /* WITH_OPENSSL_V3 */
 }
 
-const BIGNUM *
+BIGNUM *
 rsa_e(struct sshkey *k)
 {
-	const BIGNUM *e = NULL;
+#if WITH_OPENSSL_V3
+	BIGNUM *e = NULL;
 
+	ASSERT_INT_EQ(EVP_PKEY_get_bn_param(k->pkey, OSSL_PKEY_PARAM_RSA_E, &e), 1);
+	return e;
+#else
 	ASSERT_PTR_NE(k, NULL);
 	ASSERT_PTR_NE(k->pkey, NULL);
 	RSA_get0_key(EVP_PKEY_get0_RSA(k->pkey), NULL, &e, NULL);
-	return e;
+	return BN_dup(e);
+#endif /* WITH_OPENSSL_V3 */
 }
 
-const BIGNUM *
+BIGNUM *
 rsa_p(struct sshkey *k)
 {
+#if WITH_OPENSSL_V3
+	BIGNUM *p = NULL;
+	EVP_PKEY_get_bn_param(k->pkey, OSSL_PKEY_PARAM_RSA_FACTOR1, &p);
+	return p;
+#else
 	const BIGNUM *p = NULL;
 
 	ASSERT_PTR_NE(k, NULL);
 	ASSERT_PTR_NE(EVP_PKEY_get0_RSA(k->pkey), NULL);
 	RSA_get0_factors(EVP_PKEY_get0_RSA(k->pkey), &p, NULL);
-	return p;
+	return BN_dup(p);
+#endif /* WITH_OPENSSL_V3 */
 }
 
-const BIGNUM *
+BIGNUM *
 rsa_q(struct sshkey *k)
 {
+#if WITH_OPENSSL_V3
+	BIGNUM *q = NULL;
+	EVP_PKEY_get_bn_param(k->pkey, OSSL_PKEY_PARAM_RSA_FACTOR2, &q);
+	return q;
+#else
 	const BIGNUM *q = NULL;
 
 	ASSERT_PTR_NE(k, NULL);
 	ASSERT_PTR_NE(EVP_PKEY_get0_RSA(k->pkey), NULL);
 	RSA_get0_factors(EVP_PKEY_get0_RSA(k->pkey), NULL, &q);
-	return q;
+	return BN_dup(q);
+#endif /* WITH_OPENSSL_V3 */
 }
+
+#ifdef OPENSSL_HAS_ECC
+
+BIGNUM *
+ec_pub_key(struct sshkey *k)
+{
+#if WITH_OPENSSL_V3
+	BIGNUM *pub_key = NULL;
+	size_t size = 0;
+	unsigned char *p = NULL;
+
+	ASSERT_INT_EQ(EVP_PKEY_get_octet_string_param(k->pkey, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, NULL, 0, &size), 1);
+	p = malloc(size);
+	ASSERT_PTR_NE(p, NULL);
+	ASSERT_INT_EQ(EVP_PKEY_get_octet_string_param(k->pkey, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, p, size, NULL), 1);
+	pub_key = BN_bin2bn(p, size, NULL);
+	ASSERT_PTR_NE(pub_key, NULL);
+	free(p);
+	return pub_key;
+#else
+	ASSERT_PTR_NE(k->ecdsa, NULL);
+	return EC_POINT_point2bn(EC_KEY_get0_group(k->ecdsa), EC_KEY_get0_public_key(k->ecdsa),
+                             POINT_CONVERSION_UNCOMPRESSED, NULL, NULL);
+#endif /* WITH_OPENSSL_V3 */
+}
+
+BIGNUM *
+ec_priv_key(struct sshkey *k)
+{
+#if WITH_OPENSSL_V3
+	BIGNUM *priv_key = NULL;
+	EVP_PKEY_get_bn_param(k->pkey, OSSL_PKEY_PARAM_PRIV_KEY, &priv_key);
+	return priv_key;
+#else
+	ASSERT_PTR_NE(k->ecdsa, NULL);
+	return BN_dup(EC_KEY_get0_private_key(k->ecdsa));
+#endif /* WITH_OPENSSL_V3 */
+}
+
+#endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */

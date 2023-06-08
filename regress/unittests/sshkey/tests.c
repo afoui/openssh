@@ -9,6 +9,8 @@
 
 #include "../test_helper/test_helper.h"
 
+void sshkey_hmac_tests(void);
+void sshkey_umac_tests(void);
 void sshkey_tests(void);
 void sshkey_file_tests(void);
 void sshkey_fuzz_tests(void);
@@ -17,6 +19,8 @@ void sshkey_benchmarks(void);
 void
 tests(void)
 {
+	sshkey_hmac_tests();
+	sshkey_umac_tests();
 	sshkey_tests();
 	sshkey_file_tests();
 	sshkey_fuzz_tests();
