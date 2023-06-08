@@ -746,6 +746,7 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 
 		count_possible++;
 
+#if !WITH_OPENSSL_V3
 		/*
 		 * The (1/4)^N performance bound on Miller-Rabin is
 		 * extremely pessimistic, so don't spend a lot of time
@@ -761,6 +762,7 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 			    count_in);
 			continue;
 		}
+#endif /* !WITH_OPENSSL_V3 */
 
 		/*
 		 * q is possibly prime, so go ahead and really make sure
@@ -769,19 +771,31 @@ prime_test(FILE *in, FILE *out, u_int32_t trials, u_int32_t generator_wanted,
 		 * will show up on the first Rabin-Miller iteration so it
 		 * doesn't hurt to specify a high iteration count.
 		 */
+#if WITH_OPENSSL_V3
+		is_prime = BN_check_prime(p, NULL, NULL);
+		if (is_prime < 0)
+			fatal("BN_check_prime failed");
+#else
 		is_prime = BN_is_prime_ex(p, trials, NULL, NULL);
 		if (is_prime < 0)
 			fatal("BN_is_prime_ex failed");
+#endif /* WITH_OPENSSL_V3 */
 		if (is_prime == 0) {
 			debug("%10u: p is not prime", count_in);
 			continue;
 		}
 		debug("%10u: p is almost certainly prime", count_in);
 
+#if WITH_OPENSSL_V3
+		is_prime = BN_check_prime(q, NULL, NULL);
+		if (is_prime < 0)
+			fatal("BN_check_prime failed");
+#else
 		/* recheck q more rigorously */
 		is_prime = BN_is_prime_ex(q, trials - 1, NULL, NULL);
 		if (is_prime < 0)
 			fatal("BN_is_prime_ex failed");
+#endif /* WITH_OPENSSL_V3 */
 		if (is_prime == 0) {
 			debug("%10u: q is not prime", count_in);
 			continue;

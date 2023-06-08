@@ -46,13 +46,15 @@ for t in ${SSH_KEYTYPES}; do
 	cat $OBJ/$t-agent.pub >> $OBJ/authorized_keys_$USER
 	# add private key to agent
 	${SSHADD} $OBJ/$t-agent > /dev/null 2>&1
-	if [ $? -ne 0 ]; then
-		fail "ssh-add failed exit code $?"
+	r=$?
+	if [ $r -ne 0 ]; then
+		fail "ssh-add failed exit code $r"
 	fi
 	# add private key to second agent
 	SSH_AUTH_SOCK=$FW_SSH_AUTH_SOCK ${SSHADD} $OBJ/$t-agent > /dev/null 2>&1
-	if [ $? -ne 0 ]; then
-		fail "ssh-add failed exit code $?"
+	r=$?
+	if [ $r -ne 0 ]; then
+		fail "ssh-add failed exit code $r"
 	fi
 	# Move private key to ensure that we aren't accidentally using it.
 	# Keep the corresponding public keys/certs around for later use.

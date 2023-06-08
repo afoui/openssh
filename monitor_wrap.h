@@ -28,6 +28,8 @@
 #ifndef _MM_WRAP_H_
 #define _MM_WRAP_H_
 
+#include "ssh-dh-key.h"
+
 extern int use_privsep;
 #define PRIVSEP(x)	(use_privsep ? mm_##x : x)
 
@@ -43,7 +45,7 @@ struct sshkey_sig_details;
 void mm_log_handler(LogLevel, int, const char *, void *);
 int mm_is_monitor(void);
 #ifdef WITH_OPENSSL
-DH *mm_choose_dh(int, int, int);
+SSH_DH_KEY *mm_choose_dh(int, int, int);
 #endif
 int mm_sshkey_sign(struct ssh *, struct sshkey *, u_char **, size_t *,
     const u_char *, size_t, const char *, const char *,

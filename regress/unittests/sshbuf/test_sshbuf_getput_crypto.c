@@ -22,6 +22,10 @@
 #ifdef OPENSSL_HAS_NISTP256
 # include <openssl/ec.h>
 #endif
+#if WITH_OPENSSL_V3
+#include <openssl/core_names.h>
+#include <openssl/param_build.h>
+#endif /* WITH_OPENSSL_V3 */
 
 #include "../test_helper/test_helper.h"
 #include "ssherr.h"
@@ -49,12 +53,32 @@ sshbuf_getput_crypto_tests(void)
 #if defined(OPENSSL_HAS_ECC) && defined(OPENSSL_HAS_NISTP256)
 	const u_char *d;
 	size_t s;
+#if WITH_OPENSSL_V3
+	EVP_PKEY_CTX *pkctx = NULL;
+	OSSL_PARAM_BLD *bld = NULL;
+	OSSL_PARAM *params = NULL;
+	EVP_PKEY *pkey = NULL;
+	static const u_char ec256pub[] = {
+		0x04,
+		0x0c, 0x82, 0x80, 0x04, 0x83, 0x9d, 0x01, 0x06,
+		0xaa, 0x59, 0x57, 0x52, 0x16, 0x19, 0x13, 0x57,
+		0x34, 0xb4, 0x51, 0x45, 0x9d, 0xad, 0xb5, 0x86,
+		0x67, 0x7e, 0xf9, 0xdf, 0x55, 0x78, 0x49, 0x99,
+		0x4d, 0x19, 0x6b, 0x50, 0xf0, 0xb4, 0xe9, 0x4b,
+		0x3c, 0x73, 0xe3, 0xa9, 0xd4, 0xcd, 0x9d, 0xf2,
+		0xc8, 0xf9, 0xa3, 0x5e, 0x42, 0xbd, 0xd0, 0x47,
+		0x55, 0x0f, 0x69, 0xd8, 0x0e, 0xc2, 0x3c, 0xd4
+	};
+#else
 	BIGNUM *bn_x, *bn_y;
 	int ec256_nid = NID_X9_62_prime256v1;
 	char *ec256_x = "0C828004839D0106AA59575216191357"
 		        "34B451459DADB586677EF9DF55784999";
 	char *ec256_y = "4D196B50F0B4E94B3C73E3A9D4CD9DF2"
 	                "C8F9A35E42BDD047550F69D80EC23CD4";
+	EC_KEY *eck;
+	EC_POINT *ecp;
+#endif /* WITH_OPENSSL_V3 */
 	u_char expec256[] = {
 		0x04,
 		0x0c, 0x82, 0x80, 0x04, 0x83, 0x9d, 0x01, 0x06,
@@ -66,8 +90,6 @@ sshbuf_getput_crypto_tests(void)
 		0xc8, 0xf9, 0xa3, 0x5e, 0x42, 0xbd, 0xd0, 0x47,
 		0x55, 0x0f, 0x69, 0xd8, 0x0e, 0xc2, 0x3c, 0xd4
 	};
-	EC_KEY *eck;
-	EC_POINT *ecp;
 #endif
 	int r;
 
@@ -223,6 +245,32 @@ sshbuf_getput_crypto_tests(void)
 	TEST_DONE();
 
 #if defined(OPENSSL_HAS_ECC) && defined(OPENSSL_HAS_NISTP256)
+#if WITH_OPENSSL_V3
+	TEST_START("sshbuf_put_ec_pkey");
+	bld = OSSL_PARAM_BLD_new();
+	ASSERT_PTR_NE(bld, NULL);
+	ASSERT_INT_EQ(OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, SN_X9_62_prime256v1, 0), 1);
+	ASSERT_INT_EQ(OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY, ec256pub, sizeof ec256pub), 1);
+	params = OSSL_PARAM_BLD_to_param(bld);
+	ASSERT_PTR_NE(params, NULL);
+	pkctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+	ASSERT_PTR_NE(pkctx, NULL);
+	ASSERT_INT_EQ(EVP_PKEY_fromdata_init(pkctx), 1);
+	ASSERT_INT_EQ(EVP_PKEY_fromdata(pkctx, &pkey, EVP_PKEY_KEYPAIR, params), 1);
+	p1 = sshbuf_new();
+	ASSERT_PTR_NE(p1, NULL);
+	ASSERT_INT_EQ(sshbuf_put_ec_pkey(p1, pkey, 0), 0);
+	ASSERT_INT_EQ(sshbuf_get_string_direct(p1, &d, &s), 0);
+	ASSERT_SIZE_T_EQ(s, sizeof(expec256));
+	ASSERT_MEM_EQ(d, expec256, sizeof(expec256));
+
+	sshbuf_free(p1);
+	OSSL_PARAM_free(params);
+	OSSL_PARAM_BLD_free(bld);
+	EVP_PKEY_CTX_free(pkctx);
+	EVP_PKEY_free(pkey);
+	TEST_DONE();
+#else
 	TEST_START("sshbuf_put_ec");
 	eck = EC_KEY_new_by_curve_name(ec256_nid);
 	ASSERT_PTR_NE(eck, NULL);
@@ -274,6 +322,7 @@ sshbuf_getput_crypto_tests(void)
 	BN_free(bn);
 	BN_free(bn2);
 	TEST_DONE();
+#endif /* WITH_OPENSSL_V3 */
 #endif
 }
 

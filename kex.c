@@ -63,6 +63,7 @@
 #include "sshbuf.h"
 #include "digest.h"
 #include "xmalloc.h"
+#include "dh.h"
 
 /* prototype */
 static int kex_choose_conf(struct ssh *, uint32_t seq);
@@ -947,10 +948,14 @@ kex_free(struct kex *kex)
 		return;
 
 #ifdef WITH_OPENSSL
-	DH_free(kex->dh);
+	dh_free(kex->dh);
+#if WITH_OPENSSL_V3
+	EVP_PKEY_free(kex->client_pkey);
+#else
 #ifdef OPENSSL_HAS_ECC
 	EC_KEY_free(kex->ec_client_key);
 #endif /* OPENSSL_HAS_ECC */
+#endif /* WITH_OPENSSL_V3 */
 #endif /* WITH_OPENSSL */
 	for (mode = 0; mode < MODE_MAX; mode++) {
 		kex_free_newkeys(kex->newkeys[mode]);

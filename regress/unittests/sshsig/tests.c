@@ -85,7 +85,7 @@ tests(void)
         log_init("test_sshsig", SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_AUTH, 1);
 #endif
 
-#ifdef WITH_OPENSSL
+#if defined (WITH_OPENSSL) && !WITH_OPENSSL_V3
 	OpenSSL_add_all_algorithms();
 	ERR_load_crypto_strings();
 #endif

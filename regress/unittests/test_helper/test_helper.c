@@ -130,7 +130,7 @@ main(int argc, char **argv)
 	int ch;
 
 	seed_rng();
-#ifdef WITH_OPENSSL
+#if WITH_OPENSSL && !WITH_OPENSSL_V3
 	ERR_load_crypto_strings();
 #endif
 

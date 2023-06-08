@@ -42,7 +42,7 @@ struct sshmac {
 
 int	 mac_valid(const char *);
 char	*mac_alg_list(char);
-int	 mac_setup(struct sshmac *, char *);
+int	 mac_setup(struct sshmac *, const char *);
 int	 mac_init(struct sshmac *);
 int	 mac_compute(struct sshmac *, u_int32_t, const u_char *, int,
     u_char *, size_t);

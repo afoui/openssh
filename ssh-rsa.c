@@ -23,6 +23,10 @@
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
+# if WITH_OPENSSL_V3
+# include <openssl/core_names.h>
+# include "osslv3.h"
+# endif
 
 #include <stdarg.h>
 #include <string.h>
@@ -35,6 +39,488 @@
 #include "log.h"
 
 #include "openbsd-compat/openssl-compat.h"
+
+/*
+ * Returns the hash algorithm ID for a given algorithm identifier as used
+ * inside the signature blob,
+ */
+static int
+rsa_hash_id_from_ident(const char *ident)
+{
+	if (strcmp(ident, "ssh-rsa") == 0)
+		return SSH_DIGEST_SHA1;
+	if (strcmp(ident, "rsa-sha2-256") == 0)
+		return SSH_DIGEST_SHA256;
+	if (strcmp(ident, "rsa-sha2-512") == 0)
+		return SSH_DIGEST_SHA512;
+	return -1;
+}
+
+/*
+ * Return the hash algorithm ID for the specified key name. This includes
+ * all the cases of rsa_hash_id_from_ident() but also the certificate key
+ * types.
+ */
+static int
+rsa_hash_id_from_keyname(const char *alg)
+{
+	int r;
+
+	if ((r = rsa_hash_id_from_ident(alg)) != -1)
+		return r;
+	if (strcmp(alg, "ssh-rsa-cert-v01@openssh.com") == 0)
+		return SSH_DIGEST_SHA1;
+	if (strcmp(alg, "rsa-sha2-256-cert-v01@openssh.com") == 0)
+		return SSH_DIGEST_SHA256;
+	if (strcmp(alg, "rsa-sha2-512-cert-v01@openssh.com") == 0)
+		return SSH_DIGEST_SHA512;
+	return -1;
+}
+
+static const char *
+rsa_hash_alg_ident(int hash_alg)
+{
+	switch (hash_alg) {
+	case SSH_DIGEST_SHA1:
+		return "ssh-rsa";
+	case SSH_DIGEST_SHA256:
+		return "rsa-sha2-256";
+	case SSH_DIGEST_SHA512:
+		return "rsa-sha2-512";
+	}
+	return NULL;
+}
+
+# if WITH_OPENSSL_V3
+
+static const char *
+rsa_digest_name_from_hash_alg(int hash_alg)
+{
+	const char *mdname;
+
+	switch (hash_alg) {
+	case SSH_DIGEST_SHA1:
+		mdname = OSSL_DIGEST_NAME_SHA1;
+		break;
+	case SSH_DIGEST_SHA256:
+		mdname = OSSL_DIGEST_NAME_SHA2_256;
+		break;
+	case SSH_DIGEST_SHA512:
+		mdname = OSSL_DIGEST_NAME_SHA2_512;
+		break;
+	default:
+		mdname = NULL;
+	}
+
+	return mdname;
+}
+
+static u_int
+ssh_rsa_size(const struct sshkey *key)
+{
+	if (key->pkey == NULL)
+		return 0;
+
+	return EVP_PKEY_get_bits(key->pkey);
+}
+
+static int
+ssh_rsa_alloc(struct sshkey *k)
+{
+	k->pkey = EVP_PKEY_new();
+	return (k->pkey == NULL) ? SSH_ERR_LIBCRYPTO_ERROR : 0;
+}
+
+static void
+ssh_rsa_cleanup(struct sshkey *k)
+{
+	if (k->pkey != NULL)
+		EVP_PKEY_free(k->pkey);
+
+	k->pkey = NULL;
+}
+
+static int
+ssh_rsa_equal(const struct sshkey *a, const struct sshkey *b)
+{
+	if (a->pkey == NULL || b->pkey == NULL)
+		return 0;
+	return EVP_PKEY_eq(a->pkey, b->pkey) == 1;
+}
+
+
+static int
+ssh_rsa_serialize_public(const struct sshkey *key, struct sshbuf *b,
+    enum sshkey_serialize_rep opts)
+{
+	int r;
+	struct ssh_rsa_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if (key->pkey == NULL) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	if (ssh_get_rsa_key_params(key->pkey, &kp, 0) != 0) {
+		r = SSH_ERR_INTERNAL_ERROR;
+		goto out;
+	}
+
+	if ((r = sshbuf_put_bignum2(b, kp.e)) != 0 ||
+	    (r = sshbuf_put_bignum2(b, kp.n)) != 0)
+		goto out;
+
+	r = 0;
+ out:
+	ssh_rsa_key_params_deinit(&kp);
+	return r;
+}
+
+static int
+ssh_rsa_serialize_private(const struct sshkey *key, struct sshbuf *b,
+    enum sshkey_serialize_rep opts)
+{
+	int r;
+	struct ssh_rsa_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if ((r = ssh_get_rsa_key_params(key->pkey, &kp, 1)) != 0)
+		goto out;
+
+	if (!sshkey_is_cert(key)) {
+		/* Note: can't reuse ssh_rsa_serialize_public: e, n vs. n, e */
+		if ((r = sshbuf_put_bignum2(b, kp.n)) != 0 ||
+		    (r = sshbuf_put_bignum2(b, kp.e)) != 0)
+			goto out;
+	}
+	if ((r = sshbuf_put_bignum2(b, kp.d)) != 0 ||
+	    (r = sshbuf_put_bignum2(b, kp.iqmp)) != 0 ||
+	    (r = sshbuf_put_bignum2(b, kp.p)) != 0 ||
+	    (r = sshbuf_put_bignum2(b, kp.q)) != 0)
+		goto out;
+
+	r = 0;
+ out:
+	ssh_rsa_key_params_deinit(&kp);
+	return r;
+}
+
+static int
+ssh_rsa_generate(struct sshkey *k, int bits)
+{
+	EVP_PKEY_CTX *kctx = NULL;
+	EVP_PKEY *private = NULL;
+	int ret = SSH_ERR_INTERNAL_ERROR;
+
+	if (bits < SSH_RSA_MINIMUM_MODULUS_SIZE ||
+	    bits > SSHBUF_MAX_BIGNUM * 8)
+		return SSH_ERR_KEY_LENGTH;
+	kctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+	if (kctx == NULL) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+	if (EVP_PKEY_keygen_init(kctx) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+	if (EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, bits) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+	// Note: Default F4 exponent (0x10001) assumed.
+	if (EVP_PKEY_generate(kctx, &private) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	ssh_rsa_cleanup(k);
+	k->pkey = private;
+	private = NULL;
+	ret = 0;
+
+ out:
+	EVP_PKEY_free(private);
+	EVP_PKEY_CTX_free(kctx);
+	return ret;
+}
+
+static int
+ssh_rsa_copy_public(const struct sshkey *from, struct sshkey *to)
+{
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+	struct ssh_rsa_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if ((r = ssh_get_rsa_key_params(from->pkey, &kp, 0)) != 0)
+		goto out;
+
+	r = ssh_rsa_new_pkey(&kp, &to->pkey);
+
+ out:
+	ssh_rsa_key_params_deinit(&kp);
+	return r;
+}
+
+static int
+ssh_rsa_deserialize_public(const char *ktype, struct sshbuf *b,
+    struct sshkey *key)
+{
+	int ret = SSH_ERR_INTERNAL_ERROR;
+	struct ssh_rsa_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if (sshbuf_get_bignum2(b, &kp.e) != 0 ||
+	    sshbuf_get_bignum2(b, &kp.n) != 0) {
+		ret = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+
+	if ((ret = ssh_rsa_new_pkey(&kp, &key->pkey)) != 0)
+		goto out;
+
+	if ((ret = sshkey_check_rsa_length(key, 0)) != 0)
+		goto out;
+
+#ifdef DEBUG_PK
+	EVP_PKEY_print_public_fp(stderr, key->pkey, 8, NULL);
+#endif
+	/* success */
+	ret = 0;
+ out:
+	ssh_rsa_key_params_deinit(&kp);
+	return ret;
+}
+
+static int
+ssh_rsa_deserialize_private(const char *ktype, struct sshbuf *b,
+    struct sshkey *key)
+{
+	int r;
+	struct ssh_rsa_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+
+	/* Note: can't use code from ssh_rsa_deserialize_public: e, n vs. n, e */
+	if (!sshkey_is_cert(key)) {
+		if ((r = sshbuf_get_bignum2(b, &kp.n)) != 0 ||
+		    (r = sshbuf_get_bignum2(b, &kp.e)) != 0)
+			goto out;
+	} else {
+		if ((r = ssh_get_rsa_key_params(key->pkey, &kp, 0)) != 0)
+			goto out;
+	}
+
+	if ((r = sshbuf_get_bignum2(b, &kp.d)) != 0 ||
+	    (r = sshbuf_get_bignum2(b, &kp.iqmp)) != 0 ||
+	    (r = sshbuf_get_bignum2(b, &kp.p)) != 0 ||
+	    (r = sshbuf_get_bignum2(b, &kp.q)) != 0)
+		goto out;
+	if ((r = ssh_rsa_new_pkey(&kp, &key->pkey)) != 0)
+		goto out;
+	if ((r = sshkey_check_rsa_length(key, 0)) != 0)
+		goto out;
+	/* success */
+	r = 0;
+ out:
+	ssh_rsa_key_params_deinit(&kp);
+	return r;
+}
+
+/* RSASSA-PKCS1-v1_5 (PKCS #1 v2.0 signature) with SHA1 */
+static int
+ssh_rsa_sign(struct sshkey *key,
+    u_char **sigp, size_t *lenp,
+    const u_char *data, size_t datalen,
+    const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
+{
+	size_t len = 0;
+	int ret = SSH_ERR_INTERNAL_ERROR;
+	int hash_alg;
+	const char *mdname = NULL;
+	EVP_MD_CTX *ctx = NULL;
+	size_t siglen = 0;
+	u_char *sig = NULL;
+	struct sshbuf *b = NULL;
+
+	if (lenp != NULL)
+		*lenp = 0;
+	if (sigp != NULL)
+		*sigp = NULL;
+
+	if (alg == NULL || strlen(alg) == 0)
+		hash_alg = SSH_DIGEST_SHA1;
+	else
+		hash_alg = rsa_hash_id_from_keyname(alg);
+
+	if (key == NULL || key->pkey == NULL || hash_alg == -1 ||
+	    EVP_PKEY_get_base_id(key->pkey) != EVP_PKEY_RSA ||
+	    sshkey_type_plain(key->type) != KEY_RSA)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	mdname = rsa_digest_name_from_hash_alg(hash_alg);
+	if (mdname == NULL) {
+		ret = SSH_ERR_INTERNAL_ERROR;
+		goto out;
+	}
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestSignInit_ex(ctx, NULL, mdname, NULL, NULL, key->pkey, NULL) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestSign(ctx, NULL, &siglen, NULL, 0) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((sig = malloc(siglen)) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (EVP_DigestSign(ctx, sig, &siglen, data, datalen) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	/* encode signature */
+	if ((b = sshbuf_new()) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((ret = sshbuf_put_cstring(b, rsa_hash_alg_ident(hash_alg))) != 0 ||
+	    (ret = sshbuf_put_string(b, sig, siglen)) != 0)
+		goto out;
+	len = sshbuf_len(b);
+	if (sigp != NULL) {
+		if ((*sigp = malloc(len)) == NULL) {
+			ret = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memcpy(*sigp, sshbuf_ptr(b), len);
+	}
+	if (lenp != NULL)
+		*lenp = len;
+	ret = 0;
+ out:
+	EVP_MD_CTX_free(ctx);
+	freezero(sig, siglen);
+	sshbuf_free(b);
+	return ret;
+}
+
+int
+ssh_rsa_verify(const struct sshkey *key,
+    const u_char *sig, size_t siglen,
+    const u_char *data, size_t dlen, const char *alg, u_int compat,
+    struct sshkey_sig_details **detailsp)
+{
+	char *sigtype = NULL;
+	int hash_alg, want_alg, ret = SSH_ERR_INTERNAL_ERROR;
+	size_t len = 0, diff, modlen;
+	struct sshbuf *b = NULL;
+	u_char *osigblob, *sigblob = NULL;
+	EVP_MD_CTX *ctx = NULL;
+	const char *mdname = NULL;
+
+	if (key == NULL || key->pkey == NULL ||
+	    EVP_PKEY_get_base_id(key->pkey) != EVP_PKEY_RSA ||
+	    sshkey_type_plain(key->type) != KEY_RSA ||
+	    sig == NULL || siglen == 0)
+		return SSH_ERR_INVALID_ARGUMENT;
+	if (EVP_PKEY_get_bits(key->pkey) < SSH_RSA_MINIMUM_MODULUS_SIZE)
+		return SSH_ERR_KEY_LENGTH;
+
+	if ((b = sshbuf_from(sig, siglen)) == NULL)
+		return SSH_ERR_ALLOC_FAIL;
+	if (sshbuf_get_cstring(b, &sigtype, NULL) != 0) {
+		ret = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if ((hash_alg = rsa_hash_id_from_ident(sigtype)) == -1) {
+		ret = SSH_ERR_KEY_TYPE_MISMATCH;
+		goto out;
+	}
+
+	mdname = rsa_digest_name_from_hash_alg(hash_alg);
+	if (mdname == NULL) {
+		ret = SSH_ERR_INTERNAL_ERROR;
+		goto out;
+	}
+
+	/*
+	 * Allow ssh-rsa-cert-v01 certs to generate SHA2 signatures for
+	 * legacy reasons, but otherwise the signature type should match.
+	 */
+	if (alg != NULL && strcmp(alg, "ssh-rsa-cert-v01@openssh.com") != 0) {
+		if ((want_alg = rsa_hash_id_from_keyname(alg)) == -1) {
+			ret = SSH_ERR_INVALID_ARGUMENT;
+			goto out;
+		}
+		if (hash_alg != want_alg) {
+			ret = SSH_ERR_SIGNATURE_INVALID;
+			goto out;
+		}
+	}
+	if (sshbuf_get_string(b, &sigblob, &len) != 0) {
+		ret = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if (sshbuf_len(b) != 0) {
+		ret = SSH_ERR_UNEXPECTED_TRAILING_DATA;
+		goto out;
+	}
+	/* RSA_verify expects a signature of EVP_PKEY_get_size */
+	modlen = EVP_PKEY_get_size(key->pkey);
+	if (len > modlen) {
+		ret = SSH_ERR_KEY_BITS_MISMATCH;
+		goto out;
+	} else if (len < modlen) {
+		diff = modlen - len;
+		osigblob = sigblob;
+		if ((sigblob = realloc(sigblob, modlen)) == NULL) {
+			sigblob = osigblob; /* put it back for clear/free */
+			ret = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memmove(sigblob + diff, sigblob, len);
+		explicit_bzero(sigblob, diff);
+		len = modlen;
+	}
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerifyInit_ex(ctx, NULL, mdname, NULL, NULL, key->pkey, NULL) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerify(ctx, sigblob, len, data, dlen) != 1) {
+		ret = SSH_ERR_SIGNATURE_INVALID;
+		goto out;
+	}
+
+	ret = 0;
+
+ out:
+	EVP_MD_CTX_free(ctx);
+	freezero(sigblob, len);
+	free(sigtype);
+	sshbuf_free(b);
+	return ret;
+}
+
+# else
 
 static int openssh_RSA_verify(int, u_char *, size_t, u_char *, size_t, RSA *);
 
@@ -264,57 +750,6 @@ ssh_rsa_deserialize_private(const char *ktype, struct sshbuf *b,
 	BN_clear_free(rsa_q);
 	BN_clear_free(rsa_iqmp);
 	return r;
-}
-
-static const char *
-rsa_hash_alg_ident(int hash_alg)
-{
-	switch (hash_alg) {
-	case SSH_DIGEST_SHA1:
-		return "ssh-rsa";
-	case SSH_DIGEST_SHA256:
-		return "rsa-sha2-256";
-	case SSH_DIGEST_SHA512:
-		return "rsa-sha2-512";
-	}
-	return NULL;
-}
-
-/*
- * Returns the hash algorithm ID for a given algorithm identifier as used
- * inside the signature blob,
- */
-static int
-rsa_hash_id_from_ident(const char *ident)
-{
-	if (strcmp(ident, "ssh-rsa") == 0)
-		return SSH_DIGEST_SHA1;
-	if (strcmp(ident, "rsa-sha2-256") == 0)
-		return SSH_DIGEST_SHA256;
-	if (strcmp(ident, "rsa-sha2-512") == 0)
-		return SSH_DIGEST_SHA512;
-	return -1;
-}
-
-/*
- * Return the hash algorithm ID for the specified key name. This includes
- * all the cases of rsa_hash_id_from_ident() but also the certificate key
- * types.
- */
-static int
-rsa_hash_id_from_keyname(const char *alg)
-{
-	int r;
-
-	if ((r = rsa_hash_id_from_ident(alg)) != -1)
-		return r;
-	if (strcmp(alg, "ssh-rsa-cert-v01@openssh.com") == 0)
-		return SSH_DIGEST_SHA1;
-	if (strcmp(alg, "rsa-sha2-256-cert-v01@openssh.com") == 0)
-		return SSH_DIGEST_SHA256;
-	if (strcmp(alg, "rsa-sha2-512-cert-v01@openssh.com") == 0)
-		return SSH_DIGEST_SHA512;
-	return -1;
 }
 
 static int
@@ -676,6 +1111,8 @@ done:
 	freezero(decrypted, rsasize);
 	return ret;
 }
+
+#endif /* WITH_OPENSSL_V3 */
 
 static const struct sshkey_impl_funcs sshkey_rsa_funcs = {
 	/* .size = */		ssh_rsa_size,

@@ -32,6 +32,291 @@
 #include "ssherr.h"
 #include "ssh.h"
 
+#if WITH_OPENSSL_V3
+
+#include "osslv3.h"
+
+static void
+ssh_ed25519_cleanup(struct sshkey *k)
+{
+	if (k->pkey != NULL)
+		EVP_PKEY_free(k->pkey);
+
+	k->pkey = NULL;
+}
+
+static int
+ssh_ed25519_equal(const struct sshkey *a, const struct sshkey *b)
+{
+	if (a->pkey == NULL || b->pkey == NULL)
+		return 0;
+	return EVP_PKEY_eq(a->pkey, b->pkey) == 1;
+}
+
+static int
+ssh_ed25519_serialize(struct sshbuf *b, const struct sshkey *k, int private)
+{
+	struct ssh_ed25519_key_params kp;
+	int ret;
+
+	if ((ret = ssh_get_ed25519_key_params(k->pkey, &kp, private)) != 0)
+		goto out;
+
+	if ((ret = sshbuf_put_string(b, &kp.sk[ED25519_SK_SZ - ED25519_PK_SZ], ED25519_PK_SZ)) != 0)
+		goto out;
+
+	if (private) {
+		if ((ret = sshbuf_put_string(b, kp.sk, ED25519_SK_SZ)) != 0)
+			goto out;
+	}
+
+	ret = 0;
+ out:
+	ssh_ed25519_key_params_deinit(&kp);
+	return ret;
+}
+
+static int
+ssh_ed25519_serialize_public(const struct sshkey *key, struct sshbuf *b,
+    enum sshkey_serialize_rep opts)
+{
+	if (key->pkey == NULL)
+		return SSH_ERR_INVALID_ARGUMENT;
+	return ssh_ed25519_serialize(b, key, 0);
+}
+
+static int
+ssh_ed25519_serialize_private(const struct sshkey *key, struct sshbuf *b,
+    enum sshkey_serialize_rep opts)
+{
+	return ssh_ed25519_serialize(b, key, 1);
+}
+
+static int
+ssh_ed25519_generate(struct sshkey *k, int bits)
+{
+	EVP_PKEY *pkey = EVP_PKEY_Q_keygen(NULL, NULL, SN_ED25519);
+	if (pkey == NULL)
+		return SSH_ERR_LIBCRYPTO_ERROR;
+	k->pkey = pkey;
+	return 0;
+}
+
+static int
+ssh_ed25519_copy_public(const struct sshkey *from, struct sshkey *to)
+{
+	int r;
+	struct ssh_ed25519_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if (from->pkey == NULL)
+		return 0; /* XXX SSH_ERR_INTERNAL_ERROR ? */
+	if ((r = ssh_get_ed25519_key_params(from->pkey, &kp, 0)) != 0)
+		goto out;
+
+	if ((r = ssh_ed25519_new_pkey(&kp, 0, &to->pkey)) != 0)
+		goto out;
+
+ out:
+	ssh_ed25519_key_params_deinit(&kp);
+	return r;
+}
+
+static int
+ssh_ed25519_deserialize(struct sshbuf *b, struct sshkey *key, int priv)
+{
+	int r;
+	size_t pklen = 0, sklen = 0;
+	u_char *pk = NULL, *sk = NULL;
+	struct ssh_ed25519_key_params kp;
+
+	memset(&kp, 0, sizeof kp);
+	if ((r = sshbuf_get_string(b, &pk, &pklen)) != 0)
+		goto out;
+	if (pklen != ED25519_PK_SZ) {
+		r = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if (priv) {
+		if ((r = sshbuf_get_string(b, &sk, &sklen)) != 0)
+			goto out;
+		if (sklen != ED25519_SK_SZ) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+
+		memcpy(kp.sk, sk, ED25519_SK_SZ);
+	} else
+		memcpy(&kp.sk[ED25519_SK_SZ - ED25519_PK_SZ], pk, ED25519_PK_SZ);
+
+	if ((r = ssh_ed25519_new_pkey(&kp, priv, &key->pkey)) != 0)
+		goto out;
+	/* success */
+	r = 0;
+ out:
+	freezero(pk, pklen);
+	freezero(sk, sklen);
+	ssh_ed25519_key_params_deinit(&kp);
+	return r;
+}
+
+static int
+ssh_ed25519_deserialize_public(const char *ktype, struct sshbuf *b,
+    struct sshkey *key)
+{
+	return ssh_ed25519_deserialize(b, key, 0);
+}
+
+static int
+ssh_ed25519_deserialize_private(const char *ktype, struct sshbuf *b,
+    struct sshkey *key)
+{
+	return ssh_ed25519_deserialize(b, key, 1);
+}
+
+static int
+ssh_ed25519_sign(struct sshkey *key,
+    u_char **sigp, size_t *lenp,
+    const u_char *data, size_t datalen,
+    const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
+{
+	EVP_MD_CTX *ctx = NULL;
+	u_char *sig = NULL;
+	size_t siglen = 0, len;
+	int r;
+	struct sshbuf *b = NULL;
+
+	if (lenp != NULL)
+		*lenp = 0;
+	if (sigp != NULL)
+		*sigp = NULL;
+
+	if (key == NULL || key->pkey == NULL ||
+	    EVP_PKEY_get_base_id(key->pkey) != EVP_PKEY_ED25519 ||
+	    sshkey_type_plain(key->type) != KEY_ED25519 ||
+	    datalen >= INT_MAX - crypto_sign_ed25519_BYTES)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestSignInit_ex(ctx, NULL, NULL, NULL, NULL, key->pkey, NULL) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestSign(ctx, NULL, &siglen, NULL, 0) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((sig = malloc(siglen)) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (EVP_DigestSign(ctx, sig, &siglen, data, datalen) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	/* encode signature */
+	if ((b = sshbuf_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshbuf_put_cstring(b, "ssh-ed25519")) != 0 ||
+	    (r = sshbuf_put_string(b, sig, siglen)) != 0)
+		goto out;
+	len = sshbuf_len(b);
+	if (sigp != NULL) {
+		if ((*sigp = malloc(len)) == NULL) {
+			r = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memcpy(*sigp, sshbuf_ptr(b), len);
+	}
+	if (lenp != NULL)
+		*lenp = len;
+	/* success */
+	r = 0;
+ out:
+	EVP_MD_CTX_free(ctx);
+	freezero(sig, siglen);
+	sshbuf_free(b);
+	return r;
+}
+
+static int
+ssh_ed25519_verify(const struct sshkey *key,
+    const u_char *sig, size_t siglen,
+    const u_char *data, size_t dlen, const char *alg, u_int compat,
+    struct sshkey_sig_details **detailsp)
+{
+	EVP_MD_CTX *ctx = NULL;
+	struct sshbuf *b = NULL;
+	char *ktype = NULL;
+	const u_char *sigblob;
+	size_t len;
+	int r;
+
+	if (key == NULL || key->pkey == NULL ||
+	    EVP_PKEY_get_base_id(key->pkey) != EVP_PKEY_ED25519 ||
+	    sshkey_type_plain(key->type) != KEY_ED25519 ||
+	    dlen >= INT_MAX - crypto_sign_ed25519_BYTES ||
+	    sig == NULL || siglen == 0)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	if ((b = sshbuf_from(sig, siglen)) == NULL)
+		return SSH_ERR_ALLOC_FAIL;
+	if ((r = sshbuf_get_cstring(b, &ktype, NULL)) != 0 ||
+	    (r = sshbuf_get_string_direct(b, &sigblob, &len)) != 0)
+		goto out;
+	if (strcmp("ssh-ed25519", ktype) != 0) {
+		r = SSH_ERR_KEY_TYPE_MISMATCH;
+		goto out;
+	}
+	if (sshbuf_len(b) != 0) {
+		r = SSH_ERR_UNEXPECTED_TRAILING_DATA;
+		goto out;
+	}
+	if (len > crypto_sign_ed25519_BYTES) {
+		r = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if (dlen >= SIZE_MAX - len) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerifyInit_ex(ctx, NULL, NULL, NULL, NULL, key->pkey, NULL) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerify(ctx, sigblob, len, data, dlen) != 1) {
+		r = SSH_ERR_SIGNATURE_INVALID;
+		goto out;
+	}
+	/* success */
+	r = 0;
+
+ out:
+	EVP_MD_CTX_free(ctx);
+	sshbuf_free(b);
+	free(ktype);
+	return r;
+}
+
+#else
+
 static void
 ssh_ed25519_cleanup(struct sshkey *k)
 {
@@ -271,6 +556,8 @@ ssh_ed25519_verify(const struct sshkey *key,
 	free(ktype);
 	return r;
 }
+
+#endif /* WITH_OPENSSL_V3 */
 
 /* NB. not static; used by ED25519-SK */
 const struct sshkey_impl_funcs sshkey_ed25519_funcs = {

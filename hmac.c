@@ -22,17 +22,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if WITH_OPENSSL_V3
+#include <openssl/core_names.h>
+#endif /* WITH_OPENSSL_V3 */
+
 #include "sshbuf.h"
+#include "ssherr.h"
 #include "digest.h"
 #include "hmac.h"
 
 struct ssh_hmac_ctx {
 	int			 alg;
+#if WITH_OPENSSL_V3
+	EVP_MAC			*mac;
+	EVP_MAC_CTX		*ctx;
+#else
 	struct ssh_digest_ctx	*ictx;
 	struct ssh_digest_ctx	*octx;
 	struct ssh_digest_ctx	*digest;
 	u_char			*buf;
 	size_t			 buf_len;
+#endif /* WITH_OPENSSL_V3 */
 };
 
 size_t
@@ -41,9 +51,36 @@ ssh_hmac_bytes(int alg)
 	return ssh_digest_bytes(alg);
 }
 
+#if WITH_OPENSSL_V3
+/* NB. Indexed directly by algorithm number (SSH_DIGEST_XXX) */
+static const char *
+alg_names[] = {
+	SN_md5,
+	SN_sha1,
+	SN_sha256,
+	SN_sha384,
+	SN_sha512,
+};
+#endif /* WITH_OPENSSL_V3 */
+
 struct ssh_hmac_ctx *
 ssh_hmac_start(int alg)
 {
+#if WITH_OPENSSL_V3
+	struct ssh_hmac_ctx *ret;
+
+	if ((ret = calloc(1, sizeof(*ret))) == NULL)
+		goto fail;
+	ret->alg = alg;
+	if ((ret->mac = EVP_MAC_fetch(NULL, SN_hmac, NULL)) == NULL)
+		goto fail;
+	if ((ret->ctx = EVP_MAC_CTX_new(ret->mac)) == NULL)
+		goto fail;
+	return ret;
+ fail:
+	ssh_hmac_free(ret);
+	return NULL;
+#else
 	struct ssh_hmac_ctx	*ret;
 
 	if ((ret = calloc(1, sizeof(*ret))) == NULL)
@@ -60,11 +97,25 @@ ssh_hmac_start(int alg)
 fail:
 	ssh_hmac_free(ret);
 	return NULL;
+#endif /* WITH_OPENSSL_V3 */
 }
 
 int
 ssh_hmac_init(struct ssh_hmac_ctx *ctx, const void *key, size_t klen)
 {
+#if WITH_OPENSSL_V3
+	OSSL_PARAM params[2];
+	const char *alg_name;
+
+	if (ctx->alg < 0 || ctx->alg >= SSH_DIGEST_MAX)
+		return -1;
+	alg_name = alg_names[ctx->alg];
+	params[0] = OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, (char *)alg_name, 0);
+	params[1] = OSSL_PARAM_construct_end();
+	if (EVP_MAC_init(ctx->ctx, (const unsigned char *)key, klen, params) != 1)
+		return -1;
+	return 0;
+#else
 	size_t i;
 
 	/* reset ictx and octx if no is key given */
@@ -89,18 +140,31 @@ ssh_hmac_init(struct ssh_hmac_ctx *ctx, const void *key, size_t klen)
 	if (ssh_digest_copy_state(ctx->ictx, ctx->digest) < 0)
 		return -1;
 	return 0;
+#endif /* WITH_OPENSSL_V3 */
 }
 
 int
 ssh_hmac_update(struct ssh_hmac_ctx *ctx, const void *m, size_t mlen)
 {
+#if WITH_OPENSSL_V3
+	if (EVP_MAC_update(ctx->ctx, (const unsigned char *)m, mlen) != 1)
+		return SSH_ERR_LIBCRYPTO_ERROR;
+	return 0;
+#else
 	return ssh_digest_update(ctx->digest, m, mlen);
+#endif /* WITH_OPENSSL_V3 */
 }
 
 int
 ssh_hmac_update_buffer(struct ssh_hmac_ctx *ctx, const struct sshbuf *b)
 {
+#if WITH_OPENSSL_V3
+	if (EVP_MAC_update(ctx->ctx, sshbuf_ptr(b), sshbuf_len(b)) != 1)
+		return SSH_ERR_LIBCRYPTO_ERROR;
+	return 0;
+#else
 	return ssh_digest_update_buffer(ctx->digest, b);
+#endif /* WITH_OPENSSL_V3 */
 }
 
 int
@@ -108,6 +172,11 @@ ssh_hmac_final(struct ssh_hmac_ctx *ctx, u_char *d, size_t dlen)
 {
 	size_t len;
 
+#if WITH_OPENSSL_V3
+	if (EVP_MAC_final(ctx->ctx, d, &len, dlen) != 1)
+		return 1;
+	return 0;
+#else
 	len = ssh_digest_bytes(ctx->alg);
 	if (dlen < len ||
 	    ssh_digest_final(ctx->digest, ctx->buf, len))
@@ -118,12 +187,17 @@ ssh_hmac_final(struct ssh_hmac_ctx *ctx, u_char *d, size_t dlen)
 	    ssh_digest_final(ctx->digest, d, dlen) < 0)
 		return -1;
 	return 0;
+#endif /* WITH_OPENSSL_V3 */
 }
 
 void
 ssh_hmac_free(struct ssh_hmac_ctx *ctx)
 {
 	if (ctx != NULL) {
+#if WITH_OPENSSL_V3
+		EVP_MAC_CTX_free(ctx->ctx);
+		EVP_MAC_free(ctx->mac);
+#else
 		ssh_digest_free(ctx->ictx);
 		ssh_digest_free(ctx->octx);
 		ssh_digest_free(ctx->digest);
@@ -131,6 +205,7 @@ ssh_hmac_free(struct ssh_hmac_ctx *ctx)
 			explicit_bzero(ctx->buf, ctx->buf_len);
 			free(ctx->buf);
 		}
+#endif /* WITH_OPENSSL_V3 */
 		freezero(ctx, sizeof(*ctx));
 	}
 }

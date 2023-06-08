@@ -2723,7 +2723,7 @@ AC_ARG_WITH([ssl-dir],
 			else
 				CPPFLAGS="-I${withval} ${CPPFLAGS}"
 			fi
-			openssl_bin_PATH="${PATH}${PATH_SEPARATOR}${withval}/bin${PATH_SEPARATOR}${withval}/apps"
+			openssl_bin_PATH="${withval}/apps${PATH_SEPARATOR}${withval}/bin${PATH_SEPARATOR}${PATH}"
 		fi
 	]
 )
@@ -2752,8 +2752,20 @@ AC_ARG_WITH([ssl-engine],
 	]
 )
 
+dnl Disable use of OpenSSL v3 API
+disable_osslv3api=
+AC_ARG_ENABLE([osslv3api],
+	[  --disable-osslv3api     disable use of OpenSSL v3 API [[no]]],
+	[
+		if test "x$enableval" = "xno" ; then
+			disable_osslv3api=yes
+		fi
+	]
+)
+
 nocrypto_saved_LIBS="$LIBS"
 if test "x$openssl" = "xyes" ; then
+	have_osslv3api=0
 	LIBS="-lcrypto $LIBS"
 	CHANNELLIBS="-lcrypto $CHANNELLIBS"
 	AC_TRY_LINK_FUNC([RAND_add], ,
@@ -2855,17 +2867,12 @@ if test "x$openssl" = "xyes" ; then
 				*) ;;	# Assume all other versions are good.
 				esac
 				;;
-			300*)
-				# OpenSSL 3; we use the 1.1x API
-				CPPFLAGS="$CPPFLAGS -DOPENSSL_API_COMPAT=0x10100000L"
+			3???????\ *)
+				# OpenSSL 3.x
 				;;
-			301*|302*|303*)
-				# OpenSSL development branch; request 1.1x API
-				CPPFLAGS="$CPPFLAGS -DOPENSSL_API_COMPAT=0x10100000L"
-				;;
-		        *)
+			*)
 				AC_MSG_ERROR([Unknown/unsupported OpenSSL version ("$ssl_showver")])
-		                ;;
+				;;
 			esac
 			AC_MSG_RESULT([$ssl_showver])
 		],
@@ -2923,8 +2930,8 @@ if test "x$openssl" = "xyes" ; then
 
 	AC_MSG_CHECKING([if programs using OpenSSL functions will link])
 	AC_LINK_IFELSE(
-		[AC_LANG_PROGRAM([[ #include <openssl/err.h> ]],
-		[[ ERR_load_crypto_strings(); ]])],
+		[AC_LANG_PROGRAM([[ #include <openssl/crypto.h> ]],
+		[[ OpenSSL_version_num(); ]])],
 		[
 			AC_MSG_RESULT([yes])
 		],
@@ -2933,8 +2940,8 @@ if test "x$openssl" = "xyes" ; then
 			LIBS="$LIBS -ldl"
 			AC_MSG_CHECKING([if programs using OpenSSL need -ldl])
 			AC_LINK_IFELSE(
-				[AC_LANG_PROGRAM([[ #include <openssl/err.h> ]],
-				[[ ERR_load_crypto_strings(); ]])],
+				[AC_LANG_PROGRAM([[ #include <openssl/crypto.h> ]],
+				[[ OpenSSL_version_num(); ]])],
 				[
 					AC_MSG_RESULT([yes])
 					CHANNELLIBS="$CHANNELLIBS -ldl"
@@ -2946,18 +2953,40 @@ if test "x$openssl" = "xyes" ; then
 		]
 	)
 
+	# Check for v3.x API
+	AC_MSG_CHECKING([whether OpenSSL has v3.x API])
+	AC_LINK_IFELSE(
+		[AC_LANG_PROGRAM([[
+	#include <openssl/core_names.h>
+	#include <openssl/evp.h>
+	#include <openssl/param_build.h>
+		]], [[
+		EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+		const char *param_names[] = {
+			OSSL_PKEY_PARAM_GROUP_NAME,
+			OSSL_PKEY_PARAM_PUB_KEY,
+			OSSL_PKEY_PARAM_PRIV_KEY
+		};
+		]])],
+		[ AC_MSG_RESULT([yes])
+		  have_osslv3api=1 ],
+		[ AC_MSG_RESULT([no]) ]
+	)
+
+	with_openssl_v3=0
+	if test "x$have_osslv3api" = x1; then
+		if test "x$disable_osslv3api" = xyes; then
+			CPPFLAGS="${CPPFLAGS} -DOPENSSL_API_COMPAT=0x10100000L"
+		else
+			with_openssl_v3=1
+			CPPFLAGS="${CPPFLAGS} -DOPENSSL_NO_DEPRECATED=1"
+		fi
+	fi
+	AC_DEFINE_UNQUOTED(WITH_OPENSSL_V3, [$with_openssl_v3], [Use OpenSSL V3 EVP API])
+
 	AC_CHECK_FUNCS([ \
-		BN_is_prime_ex \
 		DES_crypt \
-		DSA_generate_parameters_ex \
-		EVP_DigestFinal_ex \
-		EVP_DigestInit_ex \
-		EVP_MD_CTX_cleanup \
-		EVP_MD_CTX_copy_ex \
-		EVP_MD_CTX_init \
-		HMAC_CTX_init \
-		RSA_generate_key_ex \
-		RSA_get_default_method \
+		OPENSSL_init_crypto \
 	])
 
 	# OpenSSL_add_all_algorithms may be a macro.
@@ -2972,10 +3001,8 @@ if test "x$openssl" = "xyes" ; then
 	# LibreSSL/OpenSSL API differences
 	AC_CHECK_FUNCS([ \
 		EVP_CIPHER_CTX_iv \
-		EVP_CIPHER_CTX_iv_noconst \
 		EVP_CIPHER_CTX_get_iv \
 		EVP_CIPHER_CTX_get_updated_iv \
-		EVP_CIPHER_CTX_set_iv \
 	])
 
 	if test "x$openssl_engine" = "xyes" ; then
@@ -2993,50 +3020,10 @@ if test "x$openssl" = "xyes" ; then
 		])
 	fi
 
-	# Check for OpenSSL without EVP_aes_{192,256}_cbc
-	AC_MSG_CHECKING([whether OpenSSL has crippled AES support])
-	AC_LINK_IFELSE(
-		[AC_LANG_PROGRAM([[
-	#include <stdlib.h>
-	#include <string.h>
-	#include <openssl/evp.h>
-		]], [[
-		exit(EVP_aes_192_cbc() == NULL || EVP_aes_256_cbc() == NULL);
-		]])],
-		[
-			AC_MSG_RESULT([no])
-		],
-		[
-			AC_MSG_RESULT([yes])
-			AC_DEFINE([OPENSSL_LOBOTOMISED_AES], [1],
-			    [libcrypto is missing AES 192 and 256 bit functions])
-		]
-	)
-
-	AC_MSG_CHECKING([if EVP_DigestUpdate returns an int])
-	AC_LINK_IFELSE(
-		[AC_LANG_PROGRAM([[
-	#include <stdlib.h>
-	#include <string.h>
-	#include <openssl/evp.h>
-		]], [[
-		if(EVP_DigestUpdate(NULL, NULL,0))
-			exit(0);
-		]])],
-		[
-			AC_MSG_RESULT([yes])
-		],
-		[
-			AC_MSG_RESULT([no])
-			AC_DEFINE([OPENSSL_EVP_DIGESTUPDATE_VOID], [1],
-			    [Define if EVP_DigestUpdate returns void])
-		]
-	)
-
 	# Check for various EVP support in OpenSSL
 	AC_CHECK_FUNCS([EVP_sha256 EVP_sha384 EVP_sha512 EVP_chacha20])
 
-	# Check complete ECC support in OpenSSL
+	# Check complete ECC support in OpenSSL (deprecated API)
 	AC_MSG_CHECKING([whether OpenSSL has NID_X9_62_prime256v1])
 	AC_LINK_IFELSE(
 		[AC_LANG_PROGRAM([[
@@ -3112,14 +3099,14 @@ if test "x$openssl" = "xyes" ; then
 	)
 
 	if test x$enable_nistp256 = x1 || test x$enable_nistp384 = x1 || \
-	    test x$enable_nistp521 = x1; then
+	    test x$enable_nistp521 = x1 || test x$have_osslv3api = x1; then
 		AC_DEFINE(OPENSSL_HAS_ECC, [1], [OpenSSL has ECC])
 		AC_CHECK_FUNCS([EC_KEY_METHOD_new])
 		openssl_ecc=yes
 	else
 		openssl_ecc=no
 	fi
-	if test x$enable_nistp256 = x1; then
+	if test x$enable_nistp256 = x1 || test x$have_osslv3api = x1; then
 		AC_DEFINE([OPENSSL_HAS_NISTP256], [1],
 		    [libcrypto has NID_X9_62_prime256v1])
 	else
@@ -3128,7 +3115,7 @@ if test "x$openssl" = "xyes" ; then
 			ecdh-sha2-nistp256 \
 			ecdsa-sha2-nistp256-cert-v01@openssh.com"
 	fi
-	if test x$enable_nistp384 = x1; then
+	if test x$enable_nistp384 = x1 || test x$have_osslv3api = x1; then
 		AC_DEFINE([OPENSSL_HAS_NISTP384], [1], [libcrypto has NID_secp384r1])
 	else
 		unsupported_algorithms="$unsupported_algorithms \
@@ -3136,7 +3123,7 @@ if test "x$openssl" = "xyes" ; then
 			ecdh-sha2-nistp384 \
 			ecdsa-sha2-nistp384-cert-v01@openssh.com"
 	fi
-	if test x$enable_nistp521 = x1; then
+	if test x$enable_nistp521 = x1 || test x$have_osslv3api = x1; then
 		AC_DEFINE([OPENSSL_HAS_NISTP521], [1], [libcrypto has NID_secp521r1])
 	else
 		unsupported_algorithms="$unsupported_algorithms \
@@ -3157,7 +3144,7 @@ if test "x$openssl" = "xyes" ; then
 		unsigned char buf[64];
 		memset(buf, 0, sizeof(buf));
 		exit(EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519,
-		    buf, sizeof(buf)) == NULL);
+		    NULL, buf, sizeof(buf)) == NULL);
 		]])],
 		[
 			AC_MSG_RESULT([yes])
@@ -5639,6 +5626,10 @@ echo "   used, ensure the path to scp is present, otherwise scp will not work.)"
 fi
 if test ! -z "$superuser_path" ; then
 echo "          sshd superuser user PATH: $J"
+fi
+echo "                     Use libcrypto: $openssl"
+if test "x$openssl" = xyes ; then
+echo "              Use OpenSSL v3.x API: $with_openssl_v3"
 fi
 echo "                    Manpage format: $MANTYPE"
 echo "                       PAM support: $PAM_MSG"

@@ -47,6 +47,9 @@ sshkey_file_tests(void)
 	struct sshbuf *buf, *pw;
 #ifdef WITH_OPENSSL
 	BIGNUM *a, *b, *c;
+	BIGNUM *k1_n, *k1_p, *k1_q;
+	BIGNUM *k1_pub, *k1_priv;
+	BIGNUM *k1_g, *k1_priv_key, *k1_pub_key;
 #endif
 	char *cp;
 
@@ -64,12 +67,21 @@ sshkey_file_tests(void)
 	a = load_bignum("rsa_1.param.n");
 	b = load_bignum("rsa_1.param.p");
 	c = load_bignum("rsa_1.param.q");
-	ASSERT_BIGNUM_EQ(rsa_n(k1), a);
-	ASSERT_BIGNUM_EQ(rsa_p(k1), b);
-	ASSERT_BIGNUM_EQ(rsa_q(k1), c);
+	k1_n = rsa_n(k1);
+	ASSERT_PTR_NE(k1_n, NULL);
+	k1_p = rsa_p(k1);
+	ASSERT_PTR_NE(k1_p, NULL);
+	k1_q = rsa_q(k1);
+	ASSERT_PTR_NE(k1_q, NULL);
+	ASSERT_BIGNUM_EQ(k1_n, a);
+	ASSERT_BIGNUM_EQ(k1_p, b);
+	ASSERT_BIGNUM_EQ(k1_q, c);
 	BN_free(a);
 	BN_free(b);
 	BN_free(c);
+	BN_free(k1_n);
+	BN_free(k1_p);
+	BN_free(k1_q);
 	TEST_DONE();
 
 	TEST_START("parse RSA from private w/ passphrase");
@@ -173,12 +185,18 @@ sshkey_file_tests(void)
 	a = load_bignum("dsa_1.param.g");
 	b = load_bignum("dsa_1.param.priv");
 	c = load_bignum("dsa_1.param.pub");
-	ASSERT_BIGNUM_EQ(dsa_g(k1), a);
-	ASSERT_BIGNUM_EQ(dsa_priv_key(k1), b);
-	ASSERT_BIGNUM_EQ(dsa_pub_key(k1), c);
+	k1_g = dsa_g(k1);
+	k1_priv_key = dsa_priv_key(k1);
+	k1_pub_key = dsa_pub_key(k1);
+	ASSERT_BIGNUM_EQ(k1_g, a);
+	ASSERT_BIGNUM_EQ(k1_priv_key, b);
+	ASSERT_BIGNUM_EQ(k1_pub_key, c);
 	BN_free(a);
 	BN_free(b);
 	BN_free(c);
+	BN_free(k1_g);
+	BN_free(k1_priv_key);
+	BN_free(k1_pub_key);
 	TEST_DONE();
 
 	TEST_START("parse DSA from private w/ passphrase");
@@ -266,6 +284,18 @@ sshkey_file_tests(void)
 	ASSERT_STRING_EQ((const char *)sshbuf_ptr(buf),
 	    OBJ_nid2sn(k1->ecdsa_nid));
 	sshbuf_free(buf);
+#if WITH_OPENSSL_V3
+	a = load_bignum("ecdsa_1.param.priv");
+	b = load_bignum("ecdsa_1.param.pub");
+	k1_pub = ec_pub_key(k1);
+	k1_priv = ec_priv_key(k1);
+	ASSERT_BIGNUM_EQ(a, k1_priv);
+	ASSERT_BIGNUM_EQ(b, k1_pub);
+	BN_free(a);
+	BN_free(b);
+	BN_free(k1_priv);
+	BN_free(k1_pub);
+#else
 #ifndef OPENSSL_IS_BORINGSSL /* lacks EC_POINT_point2bn() */
 	a = load_bignum("ecdsa_1.param.priv");
 	b = load_bignum("ecdsa_1.param.pub");
@@ -279,6 +309,7 @@ sshkey_file_tests(void)
 	BN_free(b);
 	BN_free(c);
 #endif /* OPENSSL_IS_BORINGSSL */
+#endif /* WITH_OPENSSL_V3 */
 	TEST_DONE();
 
 	TEST_START("parse ECDSA from private w/ passphrase");
@@ -488,7 +519,7 @@ sshkey_file_tests(void)
 	TEST_DONE();
 
 	sshkey_free(k1);
-#endif
+#endif /* defined(WITH_OPENSSL) && defined(OPENSSL_HAS_ECC) */
 
 	TEST_START("parse Ed25519-SK from private");
 	buf = load_file("ed25519_sk1");
