@@ -83,6 +83,7 @@ load_bignum(const char *name)
 	return ret;
 }
 
+#if 0 /*TODO*/
 const BIGNUM *
 rsa_n(struct sshkey *k)
 {
@@ -159,5 +160,5 @@ dsa_priv_key(struct sshkey *k)
 	DSA_get0_key(k->dsa, NULL, &priv_key);
 	return priv_key;
 }
+#endif /* TODO */
 #endif /* WITH_OPENSSL */
-
