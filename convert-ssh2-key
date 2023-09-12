@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+
+"""
+Convert regress/rsa_openssl.prv into regress/rsa_ssh2.prv.
+
+Note: rsa_openssl.prv created with:
+
+  openssl genrsa -traditional 3072 -out regress/rsa_openssl.prv
+"""
+
+# Note:
+# This script requires python3-asn1crypto
+
+import subprocess
+import asn1crypto.core
+from asn1crypto.keys import RSAPrivateKey
+from binascii import b2a_base64
+from typing import List
+
+def fold(line: str, maxlen: int) -> List[str]:
+    lines = []
+    while len(line) != 0:
+        if len(line) <= maxlen:
+            lines.append(line)
+            break
+        else:
+            lines.append(line[:maxlen])
+            line = line[maxlen:]
+
+    return lines
+
+def encode_u32(x: int) -> bytes:
+    return x.to_bytes(4, "big")
+
+def encode_string(x: bytes) -> bytes:
+    return encode_u32(len(x)) + x
+
+def encode_bignum(x: bytes) -> bytes:
+    return encode_u32(len(x) * 8) + x
+
+def encode_exponent(e_bytes: bytes) -> bytes:
+    e_val = int.from_bytes(e_bytes, "big")
+    return bytes([e_val]) if e_val < 30 else e_bytes
+
+def ssh2_encode(key: RSAPrivateKey) -> bytes:
+    MAGIC = 0x3f6ff9eb
+
+    n = key[1].contents
+    e = key[2].contents
+    d = key[3].contents
+    p = key[4].contents
+    q = key[5].contents
+    dmp1 = key[6].contents
+    dmq1 = key[7].contents
+    iqmp = key[8].contents
+
+    (i2, i3, i4) = (0, 0, 0) # 0x1df 0x1db 0x11
+    type = b"if-modn{sign{rsa-pkcs1-sha1},encrypt{rsa-pkcs1v2-oaep}}"
+    cipher = b"none"
+
+    tmp = b"".join([
+        encode_string(type),
+        encode_string(cipher),
+        encode_u32(i2),
+        encode_u32(i3),
+        encode_u32(i4),
+        encode_exponent(e),
+        encode_bignum(d),
+        encode_bignum(n),
+        encode_bignum(iqmp),
+        encode_bignum(q),
+        encode_bignum(p),
+    ])
+
+    return b"".join([
+        encode_u32(MAGIC),
+        encode_u32(8 + len(tmp)),
+        tmp,
+    ])
+
+
+def main():
+    cp = subprocess.run(
+        ["openssl", "rsa", "-traditional", "-in", "regress/rsa_openssl.prv", "-traditional", "-outform", "DER"],
+        check=True,
+        stdout=subprocess.PIPE)
+
+    openssl_key_bytes = cp.stdout
+    key = RSAPrivateKey.load(openssl_key_bytes)
+    ssh_key_bytes = ssh2_encode(key)
+
+    b64 = b2a_base64(ssh_key_bytes).decode().strip()
+    subject = "ssh-keygen test"
+    comment = "3072-bit rsa, Tue Sep 12 2023 12:16:33 +0000"
+    lines = [
+        "---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----",
+        f"Subject: {subject}",
+        f"Comment: \"{comment}\"",
+        *fold(b64, 70),
+        "---- END SSH2 ENCRYPTED PRIVATE KEY ----",
+        "---"
+    ]
+
+    with open("regress/rsa_ssh2.prv", "w") as f:
+        f.write("".join(f"{line}\n" for line in lines))
+
+
+if __name__ == "__main__":
+    main()
