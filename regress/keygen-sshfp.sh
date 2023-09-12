@@ -18,12 +18,12 @@ fi
 
 if ${SSH} -Q key-plain | grep ssh-rsa >/dev/null; then
 	fp=`${SSHKEYGEN} -r test -f ${SRC}/rsa_openssh.pub | awk '$5=="1"{print $6}'`
-	if [ "$fp" != "99c79cc09f5f81069cc017cdf9552cfc94b3b929" ]; then
+	if [ "$fp" != "c1856031cbdd5e026abf958a5a0e51dcc1fee00b" ]; then
 		fail "keygen fingerprint sha1"
 	fi
 	fp=`${SSHKEYGEN} -r test -f ${SRC}/rsa_openssh.pub | awk '$5=="2"{print $6}'`
 	if [ "$fp" != \
-	    "e30d6b9eb7a4de495324e4d5870b8220577993ea6af417e8e4a4f1c5bf01a9b6" ]; then
+	    "ff0edf55f1ba959b3eef3f06d5aed04d1e9f172d0b9ccf21c12ab9b3e6379157" ]; then
 		fail "keygen fingerprint sha256"
 	fi
 fi
