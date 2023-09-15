@@ -59,6 +59,11 @@ if [ -n "`${SSH} -Q mac | grep umac-64`" ]; then
 	have_umac=true
 fi
 
+have_chacha_poly=false
+if [ -n "`${SSH} -Q cipher | grep chacha20-poly1305@openssh.com`" ]; then
+	have_chacha_poly=true
+fi
+
 # bits < 8192 only possible with umac-64
 if $have_umac; then
 	check 3072 3des-cbc  # 112 bits.
@@ -67,4 +72,6 @@ if $have_umac; then
 fi
 
 check 8192 `${SSH} -Q cipher | grep 256`
-check 8192 chacha20-poly1305@openssh.com
+if $have_chacha_poly; then
+	check 8192 chacha20-poly1305@openssh.com
+fi

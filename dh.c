@@ -983,7 +983,12 @@ choose_dh(int min, int wantbits, int max)
 	int r;
 
 	memset(&dhg, 0, sizeof dhg);
+#ifdef DISABLE_NONFIPS
+	/* choose_dhgroup generally returns FIPS-incompatible DH groups */
+	r = -1;
+#else
 	r = choose_dhgroup(min, wantbits, max, &dhg);
+#endif
 	if (r != 0) {
 		return dh_new_group_fallback(max);
 	}

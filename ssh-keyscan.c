@@ -240,11 +240,17 @@ keygrab_ssh2(con *c)
 	case KT_RSA:
 		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = get_cert ?
 		    "rsa-sha2-512-cert-v01@openssh.com,"
-		    "rsa-sha2-256-cert-v01@openssh.com,"
-		    "ssh-rsa-cert-v01@openssh.com" :
+		    "rsa-sha2-256-cert-v01@openssh.com"
+#ifndef DISABLE_NONFIPS
+		    ",ssh-rsa-cert-v01@openssh.com"
+#endif /* DISABLE_NONFIPS */
+		    :
 		    "rsa-sha2-512,"
-		    "rsa-sha2-256,"
-		    "ssh-rsa";
+		    "rsa-sha2-256"
+#ifndef DISABLE_NONFIPS
+		    ",ssh-rsa"
+#endif /* DISABLE_NONFIPS */
+		    ;
 		break;
 	case KT_ED25519:
 		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = get_cert ?

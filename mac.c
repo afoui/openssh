@@ -61,24 +61,24 @@ static const struct macalg macs[] = {
 	{ "hmac-sha1-96",			SSH_DIGEST, SSH_DIGEST_SHA1, 96, 0, 0, 0 },
 	{ "hmac-sha2-256",			SSH_DIGEST, SSH_DIGEST_SHA256, 0, 0, 0, 0 },
 	{ "hmac-sha2-512",			SSH_DIGEST, SSH_DIGEST_SHA512, 0, 0, 0, 0 },
+#ifndef DISABLE_NONFIPS
 	{ "hmac-md5",				SSH_DIGEST, SSH_DIGEST_MD5, 0, 0, 0, 0 },
 	{ "hmac-md5-96",			SSH_DIGEST, SSH_DIGEST_MD5, 96, 0, 0, 0 },
-#ifdef WITH_UMAC
 	{ "umac-64@openssh.com",		SSH_UMAC, 0, 0, 128, 64, 0 },
 	{ "umac-128@openssh.com",		SSH_UMAC128, 0, 0, 128, 128, 0 },
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */
 
 	/* Encrypt-then-MAC variants */
 	{ "hmac-sha1-etm@openssh.com",		SSH_DIGEST, SSH_DIGEST_SHA1, 0, 0, 0, 1 },
 	{ "hmac-sha1-96-etm@openssh.com",	SSH_DIGEST, SSH_DIGEST_SHA1, 96, 0, 0, 1 },
 	{ "hmac-sha2-256-etm@openssh.com",	SSH_DIGEST, SSH_DIGEST_SHA256, 0, 0, 0, 1 },
 	{ "hmac-sha2-512-etm@openssh.com",	SSH_DIGEST, SSH_DIGEST_SHA512, 0, 0, 0, 1 },
+#ifndef DISABLE_NONFIPS
 	{ "hmac-md5-etm@openssh.com",		SSH_DIGEST, SSH_DIGEST_MD5, 0, 0, 0, 1 },
 	{ "hmac-md5-96-etm@openssh.com",	SSH_DIGEST, SSH_DIGEST_MD5, 96, 0, 0, 1 },
-#ifdef WITH_UMAC
 	{ "umac-64-etm@openssh.com",		SSH_UMAC, 0, 0, 128, 64, 1 },
 	{ "umac-128-etm@openssh.com",		SSH_UMAC128, 0, 0, 128, 128, 1 },
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */
 
 	{ NULL,					0, 0, 0, 0, 0, 0 }
 };
@@ -151,7 +151,7 @@ mac_init(struct sshmac *mac)
 		    ssh_hmac_init(mac->hmac_ctx, mac->key, mac->key_len) < 0)
 			return SSH_ERR_INVALID_ARGUMENT;
 		return 0;
-#ifdef WITH_UMAC
+#ifndef DISABLE_NONFIPS
 	case SSH_UMAC:
 		if ((mac->umac_ctx = umac_new(mac->key)) == NULL)
 			return SSH_ERR_ALLOC_FAIL;
@@ -160,7 +160,7 @@ mac_init(struct sshmac *mac)
 		if ((mac->umac_ctx = umac128_new(mac->key)) == NULL)
 			return SSH_ERR_ALLOC_FAIL;
 		return 0;
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */
 	default:
 		return SSH_ERR_INVALID_ARGUMENT;
 	}
@@ -176,9 +176,9 @@ mac_compute(struct sshmac *mac, u_int32_t seqno,
 		u_int64_t for_align;
 	} u;
 	u_char b[4];
-#ifdef WITH_UMAC
+#ifndef DISABLE_NONFIPS
 	u_char nonce[8];
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */
 
 	if (mac->mac_len > sizeof(u))
 		return SSH_ERR_INTERNAL_ERROR;
@@ -193,7 +193,7 @@ mac_compute(struct sshmac *mac, u_int32_t seqno,
 		    ssh_hmac_final(mac->hmac_ctx, u.m, sizeof(u.m)) < 0)
 			return SSH_ERR_LIBCRYPTO_ERROR;
 		break;
-#ifdef WITH_UMAC
+#ifndef DISABLE_NONFIPS
 	case SSH_UMAC:
 		POKE_U64(nonce, seqno);
 		umac_update(mac->umac_ctx, data, datalen);
@@ -204,7 +204,7 @@ mac_compute(struct sshmac *mac, u_int32_t seqno,
 		umac128_update(mac->umac_ctx, data, datalen);
 		umac128_final(mac->umac_ctx, u.m, nonce);
 		break;
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */
 	default:
 		return SSH_ERR_INVALID_ARGUMENT;
 	}
@@ -237,7 +237,7 @@ mac_check(struct sshmac *mac, u_int32_t seqno,
 void
 mac_clear(struct sshmac *mac)
 {
-#ifdef WITH_UMAC
+#ifndef DISABLE_NONFIPS
 	if (mac->umac_ctx != NULL) {
 		switch (mac->type) {
 		case SSH_UMAC:
@@ -249,7 +249,7 @@ mac_clear(struct sshmac *mac)
 			break;
 		}
 	}
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */
 	if (mac->hmac_ctx != NULL)
 		ssh_hmac_free(mac->hmac_ctx);
 	mac->hmac_ctx = NULL;

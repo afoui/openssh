@@ -35,6 +35,8 @@
 #include "ssh.h"
 #include "digest.h"
 
+#ifndef DISABLE_NONFIPS
+
 int
 ssh_ed25519_sk_verify(const struct sshkey *key,
     const u_char *signature, size_t signaturelen,
@@ -161,3 +163,17 @@ ssh_ed25519_sk_verify(const struct sshkey *key,
 	free(ktype);
 	return r;
 }
+
+#else
+
+int
+ssh_ed25519_sk_verify(const struct sshkey *key,
+    const u_char *signature, size_t signaturelen,
+    const u_char *data, size_t datalen, u_int compat,
+    struct sshkey_sig_details **detailsp)
+{
+	fprintf(stderr, "TODO: %s\n", __func__);
+	abort();
+}
+
+#endif /* DISABLE_NONFIPS */

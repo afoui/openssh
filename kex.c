@@ -88,7 +88,9 @@ struct kexalg {
 };
 static const struct kexalg kexalgs[] = {
 #ifdef WITH_OPENSSL
+#ifndef DISABLE_NONFIPS
 	{ KEX_DH1, KEX_DH_GRP1_SHA1, 0, SSH_DIGEST_SHA1 },
+#endif /* DISABLE_NONFIPS */
 	{ KEX_DH14_SHA1, KEX_DH_GRP14_SHA1, 0, SSH_DIGEST_SHA1 },
 	{ KEX_DH14_SHA256, KEX_DH_GRP14_SHA256, 0, SSH_DIGEST_SHA256 },
 	{ KEX_DH16_SHA512, KEX_DH_GRP16_SHA512, 0, SSH_DIGEST_SHA512 },
@@ -430,11 +432,27 @@ static int
 kex_send_ext_info(struct ssh *ssh)
 {
 	int r;
-	char *algs;
+	char *algs = NULL;
+#ifdef DISABLE_NONFIPS
+	char *newalgs = NULL;
+#endif /* DISABLE_NONFIPS */
 
 	debug("Sending SSH2_MSG_EXT_INFO");
 	if ((algs = sshkey_alg_list(0, 1, 1, ',')) == NULL)
 		return SSH_ERR_ALLOC_FAIL;
+
+#ifdef DISABLE_NONFIPS
+	newalgs = match_filter_denylist(algs, "ssh-rsa");
+	if (newalgs == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	free(algs);
+	algs = newalgs;
+	newalgs = NULL;
+#endif /* DISABLE_NONFIPS */
+
 	/* XXX filter algs list by allowed pubkey/hostbased types */
 	if ((r = sshpkt_start(ssh, SSH2_MSG_EXT_INFO)) != 0 ||
 	    (r = sshpkt_put_u32(ssh, 2)) != 0 ||

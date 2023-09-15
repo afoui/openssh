@@ -26,6 +26,7 @@
 #ifndef SSHKEY_H
 #define SSHKEY_H
 
+#include "config.h"
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -129,6 +130,7 @@ struct sshkey {
 	int	 flags;
 #if defined (WITH_OPENSSL) && OPENSSL_VERSION_NUMBER >= 0x3000000L
 	/* KEY_RSA, KEY_DSA, KEY_ECDSA, and KEY_ECDSA_SK */
+	/* KEY_ED25519 and KEY_ED25519_SK (DISABLE_NONFIPS) */
 	EVP_PKEY *pkey;
 	/* KEY_ECDSA and KEY_ECDSA_SK */
 	int	 ecdsa_nid;	/* NID of curve */
@@ -141,9 +143,11 @@ struct sshkey {
 	int	 ecdsa_nid;	/* NID of curve */
 	EC_KEY	*ecdsa;
 #endif
-	/* KEY_ED25519 and KEY_ED25519_SK */
+	/* KEY_ED25519 and KEY_ED25519_SK (!DISABLE_NONFIPS) */
+#ifndef DISABLE_NONFIPS
 	u_char	*ed25519_sk;
 	u_char	*ed25519_pk;
+#endif /* DISABLE_NONFIPS */
 	/* KEY_XMSS */
 	char	*xmss_name;
 	char	*xmss_filename;	/* for state file updates */

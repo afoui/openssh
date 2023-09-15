@@ -9,22 +9,35 @@ rm -f $OBJ/cert_host_key* $OBJ/host_krl_*
 # Allow all hostkey/pubkey types, prefer certs for the client
 rsa=0
 types=""
-for i in `$SSH -Q key | maybe_filter_sk`; do
+
+append_type () {
 	if [ -z "$types" ]; then
-		types="$i"
-		continue
+		types="$1"
+	else
+		types="$types,$1"
 	fi
+}
+
+prepend_type () {
+	if [ -z "$types" ]; then
+		types="$1"
+	else
+		types="$1,$types"
+	fi
+}
+
+for i in `$SSH -Q key-sig | maybe_filter_sk`; do
 	case "$i" in
 	# Special treatment for RSA keys.
 	*rsa*cert*)
-		types="rsa-sha2-256-cert-v01@openssh.com,$i,$types"
-		types="rsa-sha2-512-cert-v01@openssh.com,$types";;
+		prepend_type "rsa-sha2-256-cert-v01@openssh.com"
+		prepend_type "rsa-sha2-512-cert-v01@openssh.com";;
 	*rsa*)
 		rsa=1
-		types="$types,rsa-sha2-512,rsa-sha2-256,$i";;
+		append_type "rsa-sha2-512,rsa-sha2-256,$i";;
 	# Prefer certificate to plain keys.
-	*cert*)	types="$i,$types";;
-	*)	types="$types,$i";;
+	*cert*)	prepend_type "$i";;
+	*)	append_type "$i";;
 	esac
 done
 (
@@ -70,11 +83,23 @@ touch $OBJ/host_revoked_plain
 touch $OBJ/host_revoked_cert
 cat $OBJ/host_ca_key.pub $OBJ/host_ca_key2.pub > $OBJ/host_revoked_ca
 
-PLAIN_TYPES=`echo "$SSH_KEYTYPES" | sed 's/^ssh-dss/ssh-dsa/g;s/^ssh-//'`
+PLAIN_TYPES=""
+for t in `echo "$SSH_KEYTYPES" | sed 's/^ssh-dss/ssh-dsa/g;s/^ssh-//'`; do
+	if [ "$t" = rsa ]; then
+		if [ -z "$DISABLE_NONFIPS" ]; then
+			t="$t rsa-sha2-256 rsa-sha2-512"
+		else
+			# skip ssh-rsa, FIPS-incompatible due to SHA-1 signing.
+			t="rsa-sha2-256 rsa-sha2-512"
+		fi
+	fi
 
-if echo "$PLAIN_TYPES" | grep '^rsa$' >/dev/null 2>&1 ; then
-	PLAIN_TYPES="$PLAIN_TYPES rsa-sha2-256 rsa-sha2-512"
-fi
+	if [ -n "$PLAIN_TYPES" ]; then
+		PLAIN_TYPES="$PLAIN_TYPES $t"
+	else
+		PLAIN_TYPES="$t"
+	fi
+done
 
 # Prepare certificate, plain key and CA KRLs
 ${SSHKEYGEN} -kf $OBJ/host_krl_empty || fatal "KRL init failed"

@@ -1986,6 +1986,13 @@ AC_LINK_IFELSE(
 	[AC_DEFINE([HAVE_ISBLANK], [1], [Define if you have isblank(3C).])
 ])
 
+AC_ARG_ENABLE([nonfips],
+	[  --disable-nonfips       disable non-FIPS code [[no]]],
+	[
+		AC_DEFINE([DISABLE_NONFIPS], [1], [Disable non-FIPS algorithms])
+	]
+)
+
 disable_pkcs11=
 AC_ARG_ENABLE([pkcs11],
 	[  --disable-pkcs11        disable PKCS#11 support code [no]],

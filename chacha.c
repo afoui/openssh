@@ -6,6 +6,8 @@ Public domain.
 
 #include "includes.h"
 
+#ifndef DISABLE_NONFIPS
+
 #include "chacha.h"
 
 /* $OpenBSD: chacha.c,v 1.1 2013/11/21 00:45:44 djm Exp $ */
@@ -217,3 +219,5 @@ chacha_encrypt_bytes(chacha_ctx *x,const u8 *m,u8 *c,u32 bytes)
     m += 64;
   }
 }
+
+#endif /* DISABLE_NONFIPS */

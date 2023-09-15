@@ -27,7 +27,7 @@ kname() {
 	if [ -z "$rsa" ]; then
 		echo "$n*,ssh-ed25519*"
 	else
-		echo "$n*,ssh-rsa*,ssh-ed25519*"
+		echo "$n*,rsa-sha2-*,ssh-ed25519*"
 	fi
 }
 

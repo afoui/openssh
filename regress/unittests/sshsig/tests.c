@@ -105,9 +105,11 @@ tests(void)
 	check_sig("rsa.pub", "rsa.sig", msg, namespace);
 	TEST_DONE();
 
+#ifndef DISABLE_NONFIPS
 	TEST_START("check DSA signature");
 	check_sig("dsa.pub", "dsa.sig", msg, namespace);
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("check ECDSA signature");

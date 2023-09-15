@@ -2,7 +2,15 @@
 
 tests:		prep file-tests t-exec unit
 
+ifeq "$(DISABLE_NONFIPS)" ""
 REGRESS_TARGETS=	t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12
+else
+# Non-FIPS tests:
+# t1, t6: signing operation with digest=SHA-1
+# t4: MD5
+# t8: Non-FIPS parameters (1024-bit DSA key generation)
+REGRESS_TARGETS=	t2 t3 t5 t7 t9 t10 t11 t12
+endif
 
 # File based tests
 file-tests: $(REGRESS_TARGETS)

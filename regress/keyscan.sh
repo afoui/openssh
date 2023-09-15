@@ -4,6 +4,10 @@
 tid="keyscan"
 
 for i in $SSH_KEYTYPES; do
+	if [ "$i" = ssh-rsa ]; then
+		i="$i,rsa-sha2-*"
+	fi
+
 	if [ -z "$algs" ]; then
 		algs="$i"
 	else

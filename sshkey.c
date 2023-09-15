@@ -38,6 +38,7 @@
 # include <openssl/core_names.h>
 # include <openssl/encoder.h>
 # include <openssl/pkcs12.h>
+# include <openssl/param_build.h>
 # endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #endif
 
@@ -127,7 +128,9 @@ static const struct keytype keytypes[] = {
 	{ "ssh-rsa", "RSA", NULL, KEY_RSA, 0, 0, 0 },
 	{ "rsa-sha2-256", "RSA", NULL, KEY_RSA, 0, 0, 1 },
 	{ "rsa-sha2-512", "RSA", NULL, KEY_RSA, 0, 0, 1 },
+# ifndef DISABLE_NONFIPS
 	{ "ssh-dss", "DSA", NULL, KEY_DSA, 0, 0, 0 },
+# endif /* DISABLE_NONFIPS */
 # ifdef OPENSSL_HAS_ECC
 	{ "ecdsa-sha2-nistp256", "ECDSA", NULL,
 	    KEY_ECDSA, NID_X9_62_prime256v1, 0, 0 },
@@ -150,8 +153,10 @@ static const struct keytype keytypes[] = {
 	    "rsa-sha2-256", KEY_RSA_CERT, 0, 1, 1 },
 	{ "rsa-sha2-512-cert-v01@openssh.com", "RSA-CERT",
 	    "rsa-sha2-512", KEY_RSA_CERT, 0, 1, 1 },
+# ifndef DISABLE_NONFIPS
 	{ "ssh-dss-cert-v01@openssh.com", "DSA-CERT", NULL,
 	    KEY_DSA_CERT, 0, 1, 0 },
+# endif /* DISABLE_NONFIPS */
 # ifdef OPENSSL_HAS_ECC
 	{ "ecdsa-sha2-nistp256-cert-v01@openssh.com", "ECDSA-CERT", NULL,
 	    KEY_ECDSA_CERT, NID_X9_62_prime256v1, 1, 0 },
@@ -347,6 +352,124 @@ sshkey_names_valid2(const char *names, int allow_wildcard)
 	free(s);
 	return 1;
 }
+
+#ifndef DISABLE_NONFIPS
+static int
+sshbuf_put_ed25519_key(struct sshbuf *b, struct sshkey *k, int private)
+{
+	int ret;
+
+	if ((ret = sshbuf_put_string(b, k->ed25519_pk, ED25519_PK_SZ)) != 0) {
+		goto out;
+	}
+
+	if (private) {
+		if ((ret = sshbuf_put_string(b, k->ed25519_sk, ED25519_SK_SZ)) != 0)
+			goto out;
+	}
+
+	ret = 0;
+out:
+	return ret;
+}
+#else
+/* OpenSSL >= 3.0 assumed */
+struct ssh_ed25519_key_params
+{
+	u_char pk[ED25519_PK_SZ];
+	u_char sk[ED25519_SK_SZ];
+};
+
+static int
+ssh_get_ed25519_key_params(EVP_PKEY *pkey, struct ssh_ed25519_key_params *p, int private)
+{
+	int ret;
+	size_t pklen, sklen;
+	uint8_t sk[ED25519_SK_SZ - ED25519_PK_SZ];
+
+	if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY, NULL, 0, &pklen) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (pklen != ED25519_PK_SZ) {
+		ret = SSH_ERR_INTERNAL_ERROR;
+		goto out;
+	}
+
+	if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PUB_KEY, p->pk, ED25519_PK_SZ, &pklen) != 1) {
+		ret = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (private) {
+		if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PRIV_KEY, NULL, 0, &sklen) != 1) {
+			ret = SSH_ERR_LIBCRYPTO_ERROR;
+			goto out;
+		}
+
+		if (sklen != sizeof sk) {
+			ret = SSH_ERR_INTERNAL_ERROR;
+			goto out;
+		}
+
+		if (EVP_PKEY_get_octet_string_param(pkey, OSSL_PKEY_PARAM_PRIV_KEY, sk, ED25519_SK_SZ, &sklen) != 1) {
+			ret = SSH_ERR_LIBCRYPTO_ERROR;
+			goto out;
+		}
+
+		memcpy(p->sk, sk, sizeof sk);
+		memcpy(p->sk + sizeof sk, p->pk, ED25519_PK_SZ);
+	}
+
+	ret = 0;
+out:
+	return ret;
+}
+
+static void
+ssh_ed25519_key_params_deinit(struct ssh_ed25519_key_params *p)
+{
+	explicit_bzero(p, sizeof(*p));
+}
+
+static int
+sshbuf_put_ed25519_key(struct sshbuf *b, const struct sshkey *k, int private)
+{
+	struct ssh_ed25519_key_params key_params;
+	int ret;
+
+	if ((ret = ssh_get_ed25519_key_params(k->pkey, &key_params, private)) != 0) {
+		goto out;
+	}
+
+	if ((ret = sshbuf_put_string(b, key_params.pk, ED25519_PK_SZ)) != 0) {
+		goto out;
+	}
+
+	if (private) {
+		if ((ret = sshbuf_put_string(b, key_params.sk, ED25519_SK_SZ)) != 0)
+			goto out;
+	}
+
+	ret = 0;
+out:
+	ssh_ed25519_key_params_deinit(&key_params);
+	return ret;
+}
+
+static int
+ed25519_generate_private_key(EVP_PKEY **pkeyp)
+{
+	EVP_PKEY *pkey = EVP_PKEY_Q_keygen(NULL, NULL, SN_ED25519);
+	if (pkey == NULL) {
+		return SSH_ERR_LIBCRYPTO_ERROR;
+	}
+
+	*pkeyp = pkey;
+	return 0;
+}
+#endif /* DISABLE_NONFIPS */
 
 #ifdef WITH_OPENSSL
 # if OPENSSL_VERSION_NUMBER >= 0x3000000L
@@ -692,6 +815,27 @@ out:
 }
 
 static int
+sshkey_ed25519_eq(const struct sshkey *keya, const struct sshkey *keyb)
+{
+	int eq = 0;
+	struct ssh_ed25519_key_params a, b;
+
+	memset(&a, 0, sizeof a);
+	memset(&b, 0, sizeof b);
+	if (ssh_get_ed25519_key_params(keya->pkey, &a, 0) != 0 ||
+	    ssh_get_ed25519_key_params(keyb->pkey, &b, 0) != 0) {
+		goto out;
+	}
+
+	eq = timingsafe_bcmp(a.pk, b.pk, ED25519_PK_SZ) == 0;
+
+out:
+	ssh_ed25519_key_params_deinit(&a);
+	ssh_ed25519_key_params_deinit(&b);
+	return eq ? 1 : 0;
+}
+
+static int
 sshkey_equal_public_openssl(const struct sshkey *a, const struct sshkey *b)
 {
 	switch (a->type) {
@@ -710,6 +854,12 @@ sshkey_equal_public_openssl(const struct sshkey *a, const struct sshkey *b)
 	case KEY_ECDSA:
 #  endif /* OPENSSL_HAS_ECC */
 		return sshkey_ec_eq(a, b);
+
+	case KEY_ED25519:
+	case KEY_ED25519_CERT:
+	case KEY_ED25519_SK:
+	case KEY_ED25519_SK_CERT:
+		return sshkey_ed25519_eq(a, b);
 
 	default:
 		return 0;
@@ -841,8 +991,10 @@ sshkey_new(int type)
 	k->type = type;
 	k->ecdsa_nid = -1;
 	k->cert = NULL;
+#ifndef DISABLE_NONFIPS
 	k->ed25519_sk = NULL;
 	k->ed25519_pk = NULL;
+#endif /* DISABLE_NONFIPS */
 	k->xmss_sk = NULL;
 	k->xmss_pk = NULL;
 	switch (k->type) {
@@ -920,10 +1072,14 @@ sshkey_free(struct sshkey *k)
 		/* FALLTHROUGH */
 	case KEY_ED25519:
 	case KEY_ED25519_CERT:
+#ifndef DISABLE_NONFIPS
 		freezero(k->ed25519_pk, ED25519_PK_SZ);
 		k->ed25519_pk = NULL;
 		freezero(k->ed25519_sk, ED25519_SK_SZ);
 		k->ed25519_sk = NULL;
+#else
+		sshkey_free_openssl(k);
+#endif /* DISABLE_NONFIPS */
 		break;
 #ifdef WITH_XMSS
 	case KEY_XMSS:
@@ -1006,8 +1162,12 @@ sshkey_equal_public(const struct sshkey *a, const struct sshkey *b)
 		/* FALLTHROUGH */
 	case KEY_ED25519:
 	case KEY_ED25519_CERT:
+#ifndef DISABLE_NONFIPS
 		return a->ed25519_pk != NULL && b->ed25519_pk != NULL &&
 		    memcmp(a->ed25519_pk, b->ed25519_pk, ED25519_PK_SZ) == 0;
+#else
+		return sshkey_equal_public_openssl(a, b);
+#endif /* DISABLE_NONFIPS */
 #ifdef WITH_XMSS
 	case KEY_XMSS:
 	case KEY_XMSS_CERT:
@@ -1164,6 +1324,45 @@ to_blob_buf_rsa(const struct sshkey *key, struct sshbuf *b, const char *typename
 #endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #endif /* WITH_OPENSSL */
 
+#ifndef DISABLE_NONFIPS
+static int
+to_blob_buf_ed25519(const struct sshkey *key, struct sshbuf *b, const char *typename)
+{
+	if (key->ed25519_pk == NULL)
+		return SSH_ERR_INVALID_ARGUMENT;
+	if ((ret = sshbuf_put_cstring(b, typename)) != 0 ||
+		(ret = sshbuf_put_string(b,
+		key->ed25519_pk, ED25519_PK_SZ)) != 0)
+		return ret;
+
+	return ret;
+}
+#else
+static int
+to_blob_buf_ed25519(const struct sshkey *key, struct sshbuf *b, const char *typename)
+{
+	int ret;
+	struct ssh_ed25519_key_params key_params;
+
+	if ((ret = ssh_get_ed25519_key_params(key->pkey, &key_params, 0)) != 0) {
+		goto out;
+	}
+
+	if ((ret = sshbuf_put_cstring(b, typename)) != 0) {
+		goto out;
+	}
+
+	if ((ret = sshbuf_put_string(b, key_params.pk, ED25519_PK_SZ)) != 0) {
+		goto out;
+	}
+
+	ret = 0;
+out:
+	ssh_ed25519_key_params_deinit(&key_params);
+	return ret;
+}
+#endif /* DISABLE_NONFIPS */
+
 static int
 to_blob_buf(const struct sshkey *key, struct sshbuf *b, int force_plain,
   enum sshkey_serialize_rep opts)
@@ -1225,12 +1424,11 @@ to_blob_buf(const struct sshkey *key, struct sshbuf *b, int force_plain,
 #endif /* WITH_OPENSSL */
 	case KEY_ED25519:
 	case KEY_ED25519_SK:
-		if (key->ed25519_pk == NULL)
-			return SSH_ERR_INVALID_ARGUMENT;
-		if ((ret = sshbuf_put_cstring(b, typename)) != 0 ||
-		    (ret = sshbuf_put_string(b,
-		    key->ed25519_pk, ED25519_PK_SZ)) != 0)
+		ret = to_blob_buf_ed25519(key, b, typename);
+		if (ret != 0) {
 			return ret;
+		}
+
 		if (type == KEY_ED25519_SK) {
 			if ((ret = sshbuf_put_cstring(b,
 			    key->sk_application)) != 0)
@@ -1841,18 +2039,36 @@ sshkey_read(struct sshkey *ret, char **cpp)
 # endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #endif /* WITH_OPENSSL */
 	case KEY_ED25519:
+#ifndef DISABLE_NONFIPS
 		freezero(ret->ed25519_pk, ED25519_PK_SZ);
 		ret->ed25519_pk = k->ed25519_pk;
 		k->ed25519_pk = NULL;
 #ifdef DEBUG_PK
 		/* XXX */
 #endif
+#else
+		EVP_PKEY_free(ret->pkey);
+		ret->pkey = k->pkey;
+		k->pkey = NULL;
+#ifdef DEBUG_PK
+		EVP_PKEY_print_private_fp(stderr, ret->pkey, 8, NULL);
+#endif
+#endif /* DISABLE_NONFIPS */
 		break;
 	case KEY_ED25519_SK:
+#ifndef DISABLE_NONFIPS
 		freezero(ret->ed25519_pk, ED25519_PK_SZ);
 		ret->ed25519_pk = k->ed25519_pk;
-		ret->sk_application = k->sk_application;
 		k->ed25519_pk = NULL;
+#else
+		EVP_PKEY_free(ret->pkey);
+		ret->pkey = k->pkey;
+		k->pkey = NULL;
+#ifdef DEBUG_PK
+		EVP_PKEY_print_private_fp(stderr, ret->pkey, 8, NULL);
+#endif
+#endif /* DISABLE_NONFIPS */
+		ret->sk_application = k->sk_application;
 		k->sk_application = NULL;
 		break;
 #ifdef WITH_XMSS
@@ -2306,6 +2522,7 @@ sshkey_generate(int type, u_int bits, struct sshkey **keyp)
 		return SSH_ERR_ALLOC_FAIL;
 	switch (type) {
 	case KEY_ED25519:
+#ifndef DISABLE_NONFIPS
 		if ((k->ed25519_pk = malloc(ED25519_PK_SZ)) == NULL ||
 		    (k->ed25519_sk = malloc(ED25519_SK_SZ)) == NULL) {
 			ret = SSH_ERR_ALLOC_FAIL;
@@ -2313,6 +2530,9 @@ sshkey_generate(int type, u_int bits, struct sshkey **keyp)
 		}
 		crypto_sign_ed25519_keypair(k->ed25519_pk, k->ed25519_sk);
 		ret = 0;
+#else
+		ret = ed25519_generate_private_key(&k->pkey);
+#endif /* DISABLE_NONFIPS */
 		break;
 #ifdef WITH_XMSS
 	case KEY_XMSS:
@@ -2466,6 +2686,10 @@ sshkey_from_private_openssl(const struct sshkey *k, struct sshkey *n)
 
 	case KEY_RSA:
 	case KEY_RSA_CERT:
+	case KEY_ED25519:
+	case KEY_ED25519_CERT:
+	case KEY_ED25519_SK:
+	case KEY_ED25519_SK_CERT:
 		if ((n->pkey = EVP_PKEY_dup(k->pkey)) == NULL) {
 			r = SSH_ERR_LIBCRYPTO_ERROR;
 			goto out;
@@ -2602,6 +2826,7 @@ sshkey_from_private(const struct sshkey *k, struct sshkey **pkp)
 	case KEY_ED25519_CERT:
 	case KEY_ED25519_SK:
 	case KEY_ED25519_SK_CERT:
+#ifndef DISABLE_NONFIPS
 		if (k->ed25519_pk != NULL) {
 			if ((n->ed25519_pk = malloc(ED25519_PK_SZ)) == NULL) {
 				r = SSH_ERR_ALLOC_FAIL;
@@ -2609,6 +2834,12 @@ sshkey_from_private(const struct sshkey *k, struct sshkey **pkp)
 			}
 			memcpy(n->ed25519_pk, k->ed25519_pk, ED25519_PK_SZ);
 		}
+#else
+		r = sshkey_from_private_openssl(k, n);
+		if (r != 0) {
+			goto out;
+		}
+#endif /* DISABLE_NONFIPS */
 		if (k->type != KEY_ED25519_SK &&
 		    k->type != KEY_ED25519_SK_CERT)
 			break;
@@ -3318,6 +3549,195 @@ out:
 # endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #endif /* WITH_OPENSSL */
 
+#ifndef DISABLE_NONFIPS
+static int
+sshkey_from_blob_internal_ed25519(struct sshbuf *b, int type, struct sshkey **keyp)
+{
+	int ret;
+	u_char *pk = NULL;
+	struct sshkey *key = NULL;
+	size_t len;
+
+	if ((ret = sshbuf_get_string(b, &pk, &len)) != 0)
+		goto out;
+	if (len != ED25519_PK_SZ) {
+		ret = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if ((key = sshkey_new(type)) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if (type == KEY_ED25519_SK || type == KEY_ED25519_SK_CERT) {
+		/* Parse additional security-key application string */
+		if (sshbuf_get_cstring(b, &key->sk_application,
+			NULL) != 0) {
+			ret = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+#ifdef DEBUG_PK
+		fprintf(stderr, "App: %s\n", key->sk_application);
+#endif
+	}
+
+	key->ed25519_pk = pk;
+	pk = NULL;
+	*keyp = key;
+	key = NULL;
+	ret = 0;
+out:
+	sshkey_free(key);
+	free(pk);
+	return ret;
+}
+#else
+static int
+make_evp_pkey_from_ed25519_pub_key_bytes(
+	const unsigned char *pub_key_bytes, size_t pub_key_len,
+	EVP_PKEY **pkeyp)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	OSSL_PARAM_BLD *param_bld = NULL;
+	OSSL_PARAM *param = NULL;
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+
+	ctx = EVP_PKEY_CTX_new_from_name(NULL, SN_ED25519, NULL);
+	if (ctx == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata_init(ctx) != 1) {
+		goto out;
+	}
+
+	if ((param_bld = OSSL_PARAM_BLD_new()) == NULL) {
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_octet_string(param_bld, OSSL_PKEY_PARAM_PUB_KEY, pub_key_bytes, pub_key_len) != 1) {
+		goto out;
+	}
+
+	if ((param = OSSL_PARAM_BLD_to_param(param_bld)) == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata(ctx, pkeyp, EVP_PKEY_PUBLIC_KEY, param) != 1) {
+		goto out;
+	}
+
+	r = 0;
+
+out:
+	OSSL_PARAM_free(param);
+	OSSL_PARAM_BLD_free(param_bld);
+	EVP_PKEY_CTX_free(ctx);
+	return r;
+}
+
+static int
+make_evp_pkey_from_ed25519_key_bytes(
+	const unsigned char *pk, size_t pklen,
+	const unsigned char *sk, size_t sklen,
+	EVP_PKEY **pkeyp)
+{
+	EVP_PKEY_CTX *ctx = NULL;
+	OSSL_PARAM_BLD *param_bld = NULL;
+	OSSL_PARAM *param = NULL;
+	int r = SSH_ERR_LIBCRYPTO_ERROR;
+
+	if (pklen != ED25519_PK_SZ || sklen != ED25519_SK_SZ) {
+		r = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+
+	if (memcmp(pk, sk + ED25519_SK_SZ - ED25519_PK_SZ, ED25519_PK_SZ) != 0) {
+		r = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+
+	if ((ctx = EVP_PKEY_CTX_new_from_name(NULL, SN_ED25519, NULL)) == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata_init(ctx) != 1) {
+		goto out;
+	}
+
+	if ((param_bld = OSSL_PARAM_BLD_new()) == NULL) {
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_octet_string(param_bld, OSSL_PKEY_PARAM_PUB_KEY, pk, pklen) != 1) {
+		goto out;
+	}
+
+	if (OSSL_PARAM_BLD_push_octet_string(param_bld, OSSL_PKEY_PARAM_PRIV_KEY, sk, sklen - ED25519_PK_SZ) != 1) {
+		goto out;
+	}
+
+	if ((param = OSSL_PARAM_BLD_to_param(param_bld)) == NULL) {
+		goto out;
+	}
+
+	if (EVP_PKEY_fromdata(ctx, pkeyp, EVP_PKEY_KEYPAIR, param) != 1) {
+		ERR_print_errors_fp(stderr);
+		goto out;
+	}
+
+	r = 0;
+
+out:
+	OSSL_PARAM_free(param);
+	OSSL_PARAM_BLD_free(param_bld);
+	EVP_PKEY_CTX_free(ctx);
+	return r;
+}
+
+static int
+sshkey_from_blob_internal_ed25519(struct sshbuf *b, int type, struct sshkey **keyp)
+{
+	int ret;
+	u_char *pk = NULL;
+	struct sshkey *key = NULL;
+	size_t len;
+
+	if ((ret = sshbuf_get_string(b, &pk, &len)) != 0)
+		goto out;
+	if (len != ED25519_PK_SZ) {
+		ret = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if ((key = sshkey_new(type)) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if (type == KEY_ED25519_SK || type == KEY_ED25519_SK_CERT) {
+		/* Parse additional security-key application string */
+		if (sshbuf_get_cstring(b, &key->sk_application,
+			NULL) != 0) {
+			ret = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+#ifdef DEBUG_PK
+		fprintf(stderr, "App: %s\n", key->sk_application);
+#endif
+	}
+
+	if ((ret = make_evp_pkey_from_ed25519_pub_key_bytes(pk, len, &key->pkey)) != 0) {
+		goto out;
+	}
+
+	*keyp = key;
+	key = NULL;
+	ret = 0;
+out:
+	sshkey_free(key);
+	free(pk);
+	return ret;
+}
+#endif /* DISABLE_NONFIPS */
+
 static int
 sshkey_from_blob_internal(struct sshbuf *b, struct sshkey **keyp,
     int allow_cert)
@@ -3326,7 +3746,6 @@ sshkey_from_blob_internal(struct sshbuf *b, struct sshkey **keyp,
 	char *ktype = NULL, *xmss_name = NULL;
 	struct sshkey *key = NULL;
 	size_t len;
-	u_char *pk = NULL;
 	struct sshbuf *copy;
 
 #ifdef DEBUG_PK /* XXX */
@@ -3404,29 +3823,10 @@ sshkey_from_blob_internal(struct sshbuf *b, struct sshkey **keyp,
 		/* FALLTHROUGH */
 	case KEY_ED25519:
 	case KEY_ED25519_SK:
-		if ((ret = sshbuf_get_string(b, &pk, &len)) != 0)
-			goto out;
-		if (len != ED25519_PK_SZ) {
-			ret = SSH_ERR_INVALID_FORMAT;
+		ret = sshkey_from_blob_internal_ed25519(b, type, &key);
+		if (ret != 0) {
 			goto out;
 		}
-		if ((key = sshkey_new(type)) == NULL) {
-			ret = SSH_ERR_ALLOC_FAIL;
-			goto out;
-		}
-		if (type == KEY_ED25519_SK || type == KEY_ED25519_SK_CERT) {
-			/* Parse additional security-key application string */
-			if (sshbuf_get_cstring(b, &key->sk_application,
-			    NULL) != 0) {
-				ret = SSH_ERR_INVALID_FORMAT;
-				goto out;
-			}
-#ifdef DEBUG_PK
-			fprintf(stderr, "App: %s\n", key->sk_application);
-#endif
-		}
-		key->ed25519_pk = pk;
-		pk = NULL;
 		break;
 #ifdef WITH_XMSS
 	case KEY_XMSS_CERT:
@@ -3482,7 +3882,6 @@ sshkey_from_blob_internal(struct sshbuf *b, struct sshkey **keyp,
 	sshkey_free(key);
 	free(xmss_name);
 	free(ktype);
-	free(pk);
 	return ret;
 }
 
@@ -3953,9 +4352,10 @@ sshkey_certify_custom(struct sshkey *k, struct sshkey *ca, const char *alg,
 #endif /* WITH_OPENSSL */
 	case KEY_ED25519_CERT:
 	case KEY_ED25519_SK_CERT:
-		if ((ret = sshbuf_put_string(cert,
-		    k->ed25519_pk, ED25519_PK_SZ)) != 0)
+		if ((ret = sshbuf_put_ed25519_key(cert, k, 0)) != 0) {
 			goto out;
+		}
+
 		if (k->type == KEY_ED25519_SK_CERT) {
 			if ((ret = sshbuf_put_cstring(cert,
 			    k->sk_application)) != 0)
@@ -4286,6 +4686,41 @@ sshkey_private_serialize_openssl(struct sshkey *key, struct sshbuf *b)
 			goto out;
 		break;
 # endif /* OPENSSL_HAS_ECC */
+	case KEY_ED25519:
+		if ((r = sshbuf_put_ed25519_key(b, key, 1)) != 0) {
+			goto out;
+		}
+		break;
+	case KEY_ED25519_CERT:
+		if (key->cert == NULL || sshbuf_len(key->cert->certblob) == 0) {
+			r = SSH_ERR_INVALID_ARGUMENT;
+			goto out;
+		}
+		if ((r = sshbuf_put_stringb(b, key->cert->certblob)) != 0 ||
+		    (r = sshbuf_put_ed25519_key(b, key, 1)) != 0)
+			goto out;
+		break;
+	case KEY_ED25519_SK:
+		if ((r = sshbuf_put_ed25519_key(b, key, 0)) != 0 ||
+		    (r = sshbuf_put_cstring(b, key->sk_application)) != 0 ||
+		    (r = sshbuf_put_u8(b, key->sk_flags)) != 0 ||
+		    (r = sshbuf_put_stringb(b, key->sk_key_handle)) != 0 ||
+		    (r = sshbuf_put_stringb(b, key->sk_reserved)) != 0)
+			goto out;
+		break;
+	case KEY_ED25519_SK_CERT:
+		if (key->cert == NULL || sshbuf_len(key->cert->certblob) == 0) {
+			r = SSH_ERR_INVALID_ARGUMENT;
+			goto out;
+		}
+		if ((r = sshbuf_put_stringb(b, key->cert->certblob)) != 0 ||
+		    (r = sshbuf_put_ed25519_key(b, key, 0)) != 0 ||
+		    (r = sshbuf_put_cstring(b, key->sk_application)) != 0 ||
+		    (r = sshbuf_put_u8(b, key->sk_flags)) != 0 ||
+		    (r = sshbuf_put_stringb(b, key->sk_key_handle)) != 0 ||
+		    (r = sshbuf_put_stringb(b, key->sk_reserved)) != 0)
+			goto out;
+		break;
 	default:
 		r = SSH_ERR_INTERNAL_ERROR;
 		break;
@@ -4438,6 +4873,7 @@ sshkey_private_serialize_opt(struct sshkey *key, struct sshbuf *buf,
 		}
 		break;
 #endif /* WITH_OPENSSL */
+#ifndef DISABLE_NONFIPS
 	case KEY_ED25519:
 		if ((r = sshbuf_put_string(b, key->ed25519_pk,
 		    ED25519_PK_SZ)) != 0 ||
@@ -4480,6 +4916,17 @@ sshkey_private_serialize_opt(struct sshkey *key, struct sshbuf *buf,
 		    (r = sshbuf_put_stringb(b, key->sk_reserved)) != 0)
 			goto out;
 		break;
+#else
+	case KEY_ED25519:
+	case KEY_ED25519_CERT:
+	case KEY_ED25519_SK:
+	case KEY_ED25519_SK_CERT:
+		r = sshkey_private_serialize_openssl(key, b);
+		if (r != 0) {
+			goto out;
+		}
+		break;
+#endif /* DISABLE_NONFIPS */
 #ifdef WITH_XMSS
 	case KEY_XMSS:
 		if (key->xmss_name == NULL) {
@@ -4952,6 +5399,111 @@ static int sshkey_rsa_enable_blinding(struct sshkey *key)
 # endif /* OPENSSL_VERSION_NUMBER >= 0x3000000L */
 #endif
 
+#ifndef DISABLE_NONFIPS
+static int
+sshkey_private_deserialize_ed25519(struct sshbuf *buf, int type, struct sshkey *k)
+{
+	int r;
+	size_t pklen, sklen;
+
+	switch (type) {
+	case KEY_ED25519:
+	case KEY_ED25519_CERT:
+		if ((r = sshbuf_get_string(buf, &ed25519_pk, &pklen)) != 0 ||
+		    (r = sshbuf_get_string(buf, &ed25519_sk, &sklen)) != 0)
+			goto out;
+		if (pklen != ED25519_PK_SZ || sklen != ED25519_SK_SZ) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+		k->ed25519_pk = ed25519_pk;
+		k->ed25519_sk = ed25519_sk;
+		ed25519_pk = ed25519_sk = NULL; /* transferred */
+		break;
+	case KEY_ED25519_SK:
+	case KEY_ED25519_SK_CERT:
+		if ((r = sshbuf_get_string(buf, &ed25519_pk, &pklen)) != 0)
+			goto out;
+		if (pklen != ED25519_PK_SZ) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+		if ((k->sk_key_handle = sshbuf_new()) == NULL ||
+		    (k->sk_reserved = sshbuf_new()) == NULL) {
+			r = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		if ((r = sshbuf_get_cstring(buf, &k->sk_application,
+		    NULL)) != 0 ||
+		    (r = sshbuf_get_u8(buf, &k->sk_flags)) != 0 ||
+		    (r = sshbuf_get_stringb(buf, k->sk_key_handle)) != 0 ||
+		    (r = sshbuf_get_stringb(buf, k->sk_reserved)) != 0)
+			goto out;
+		k->ed25519_pk = ed25519_pk;
+		ed25519_pk = NULL; /* transferred */
+		break;
+	}
+
+	r = 0;
+out:
+	return r;
+}
+#else
+static int
+sshkey_private_deserialize_ed25519(struct sshbuf *buf, int type, struct sshkey *k)
+{
+	int r;
+	size_t pklen = 0, sklen = 0;
+	u_char *pk = NULL;
+	u_char *sk = NULL;
+
+	switch (type) {
+	case KEY_ED25519:
+	case KEY_ED25519_CERT:
+		if ((r = sshbuf_get_string(buf, &pk, &pklen)) != 0 ||
+		    (r = sshbuf_get_string(buf, &sk, &sklen)) != 0)
+			goto out;
+
+		if ((r = make_evp_pkey_from_ed25519_key_bytes(pk, pklen, sk, sklen, &k->pkey)) != 0) {
+			goto out;
+		}
+
+		break;
+	case KEY_ED25519_SK:
+	case KEY_ED25519_SK_CERT:
+		if ((r = sshbuf_get_string(buf, &pk, &pklen)) != 0)
+			goto out;
+		if (pklen != ED25519_PK_SZ) {
+			r = SSH_ERR_INVALID_FORMAT;
+			goto out;
+		}
+		if ((k->sk_key_handle = sshbuf_new()) == NULL ||
+		    (k->sk_reserved = sshbuf_new()) == NULL) {
+			r = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		if ((r = sshbuf_get_cstring(buf, &k->sk_application,
+		    NULL)) != 0 ||
+		    (r = sshbuf_get_u8(buf, &k->sk_flags)) != 0 ||
+		    (r = sshbuf_get_stringb(buf, k->sk_key_handle)) != 0 ||
+		    (r = sshbuf_get_stringb(buf, k->sk_reserved)) != 0)
+			goto out;
+
+		if ((r = make_evp_pkey_from_ed25519_pub_key_bytes(pk, pklen, &k->pkey)) != 0) {
+			goto out;
+		}
+
+		break;
+	}
+
+	r = 0;
+out:
+	freezero(pk, pklen);
+	freezero(sk, sklen);
+	return r;
+}
+#endif /* DISABLE_NONFIPS */
+
 int
 sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 {
@@ -4992,9 +5544,11 @@ sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 		 * private key body, we require these to match.
 		 */
 		expect_sk_application = k->sk_application;
-		expect_ed25519_pk = k->ed25519_pk;
 		k->sk_application = NULL;
+#ifndef DISABLE_NONFIPS
+		expect_ed25519_pk = k->ed25519_pk;
 		k->ed25519_pk = NULL;
+#endif /* DISABLE_NONFIPS */
 	} else {
 		if ((k = sshkey_new(type)) == NULL) {
 			r = SSH_ERR_ALLOC_FAIL;
@@ -5028,38 +5582,11 @@ sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 #endif /* WITH_OPENSSL */
 	case KEY_ED25519:
 	case KEY_ED25519_CERT:
-		if ((r = sshbuf_get_string(buf, &ed25519_pk, &pklen)) != 0 ||
-		    (r = sshbuf_get_string(buf, &ed25519_sk, &sklen)) != 0)
-			goto out;
-		if (pklen != ED25519_PK_SZ || sklen != ED25519_SK_SZ) {
-			r = SSH_ERR_INVALID_FORMAT;
-			goto out;
-		}
-		k->ed25519_pk = ed25519_pk;
-		k->ed25519_sk = ed25519_sk;
-		ed25519_pk = ed25519_sk = NULL; /* transferred */
-		break;
 	case KEY_ED25519_SK:
 	case KEY_ED25519_SK_CERT:
-		if ((r = sshbuf_get_string(buf, &ed25519_pk, &pklen)) != 0)
-			goto out;
-		if (pklen != ED25519_PK_SZ) {
-			r = SSH_ERR_INVALID_FORMAT;
+		if ((r = sshkey_private_deserialize_ed25519(buf, type, k)) != 0) {
 			goto out;
 		}
-		if ((k->sk_key_handle = sshbuf_new()) == NULL ||
-		    (k->sk_reserved = sshbuf_new()) == NULL) {
-			r = SSH_ERR_ALLOC_FAIL;
-			goto out;
-		}
-		if ((r = sshbuf_get_cstring(buf, &k->sk_application,
-		    NULL)) != 0 ||
-		    (r = sshbuf_get_u8(buf, &k->sk_flags)) != 0 ||
-		    (r = sshbuf_get_stringb(buf, k->sk_key_handle)) != 0 ||
-		    (r = sshbuf_get_stringb(buf, k->sk_reserved)) != 0)
-			goto out;
-		k->ed25519_pk = ed25519_pk;
-		ed25519_pk = NULL; /* transferred */
 		break;
 #ifdef WITH_XMSS
 	case KEY_XMSS:
@@ -5101,9 +5628,13 @@ sshkey_private_deserialize(struct sshbuf *buf, struct sshkey **kp)
 	}
 #endif /* WITH_OPENSSL */
 	if ((expect_sk_application != NULL && (k->sk_application == NULL ||
-	    strcmp(expect_sk_application, k->sk_application) != 0)) ||
+	    strcmp(expect_sk_application, k->sk_application) != 0))
+#ifndef DISABLE_NONFIPS
+		||
 	    (expect_ed25519_pk != NULL && (k->ed25519_pk == NULL ||
-	    memcmp(expect_ed25519_pk, k->ed25519_pk, ED25519_PK_SZ) != 0))) {
+	    memcmp(expect_ed25519_pk, k->ed25519_pk, ED25519_PK_SZ) != 0))
+#endif /* DISABLE_NONFIPS */
+	) {
 		r = SSH_ERR_KEY_CERT_MISMATCH;
 		goto out;
 	}

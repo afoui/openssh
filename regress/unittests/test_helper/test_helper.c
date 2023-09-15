@@ -48,6 +48,7 @@
 #include "entropy.h"
 #include "test_helper.h"
 #include "atomicio.h"
+#include "log.h"
 
 #define TEST_CHECK_INT(r, pred) do {		\
 		switch (pred) {			\
@@ -177,8 +178,10 @@ main(int argc, char **argv)
 	setvbuf(stdout, NULL, _IONBF, 0);
 	if (!quiet_mode)
 		printf("%s: ", __progname);
-	if (verbose_mode)
+	if (verbose_mode) {
 		printf("\n");
+		log_init(__progname, SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_USER, 1);
+	}
 
 	tests();
 

@@ -783,6 +783,7 @@ with_ldns
 with_libedit
 with_audit
 with_pie
+enable_nonfips
 enable_pkcs11
 enable_security_key
 with_security_key_builtin
@@ -1452,6 +1453,7 @@ Optional Features:
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
   --disable-largefile     omit support for large files
+  --disable-nonfips       disable non-FIPS code [no]
   --disable-pkcs11        disable PKCS#11 support code [no]
   --disable-security-key  disable U2F/FIDO support code no
   --disable-strip         Disable calling strip(1) on install
@@ -13389,6 +13391,18 @@ printf "%s\n" "#define HAVE_ISBLANK 1" >>confdefs.h
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.beam \
     conftest$ac_exeext conftest.$ac_ext
+
+# Check whether --enable-nonfips was given.
+if test ${enable_nonfips+y}
+then :
+  enableval=$enable_nonfips;
+
+printf "%s\n" "#define DISABLE_NONFIPS 1" >>confdefs.h
+
+
+
+fi
+
 
 disable_pkcs11=
 # Check whether --enable-pkcs11 was given.

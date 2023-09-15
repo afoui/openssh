@@ -24,6 +24,10 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "config.h"
+
+#ifndef DISABLE_NONFIPS
+
 #define KEX_SERVER_KEX	\
 	"curve25519-sha256," \
 	"curve25519-sha256@libssh.org," \
@@ -35,6 +39,21 @@
 	"diffie-hellman-group16-sha512," \
 	"diffie-hellman-group18-sha512," \
 	"diffie-hellman-group14-sha256"
+
+#else
+
+#define KEX_SERVER_KEX	\
+	"curve25519-sha256," \
+	"curve25519-sha256@libssh.org," \
+	"ecdh-sha2-nistp256," \
+	"ecdh-sha2-nistp384," \
+	"ecdh-sha2-nistp521," \
+	"diffie-hellman-group-exchange-sha256," \
+	"diffie-hellman-group16-sha512," \
+	"diffie-hellman-group18-sha512," \
+	"diffie-hellman-group14-sha256"
+
+#endif /* DISABLE_NONFIPS */
 
 #define KEX_CLIENT_KEX KEX_SERVER_KEX
 
@@ -56,12 +75,24 @@
 	"rsa-sha2-512," \
 	"rsa-sha2-256"
 
+#ifndef DISABLE_NONFIPS
+
 #define	KEX_SERVER_ENCRYPT \
 	"chacha20-poly1305@openssh.com," \
 	"aes128-ctr,aes192-ctr,aes256-ctr," \
 	"aes128-gcm@openssh.com,aes256-gcm@openssh.com"
 
+#else
+
+#define	KEX_SERVER_ENCRYPT \
+	"aes128-ctr,aes192-ctr,aes256-ctr," \
+	"aes128-gcm@openssh.com,aes256-gcm@openssh.com"
+
+#endif /* DISABLE_NONFIPS */
+
 #define KEX_CLIENT_ENCRYPT KEX_SERVER_ENCRYPT
+
+#ifndef DISABLE_NONFIPS
 
 #define	KEX_SERVER_MAC \
 	"umac-64-etm@openssh.com," \
@@ -74,6 +105,18 @@
 	"hmac-sha2-256," \
 	"hmac-sha2-512," \
 	"hmac-sha1"
+
+#else
+
+#define	KEX_SERVER_MAC \
+	"hmac-sha2-256-etm@openssh.com," \
+	"hmac-sha2-512-etm@openssh.com," \
+	"hmac-sha1-etm@openssh.com," \
+	"hmac-sha2-256," \
+	"hmac-sha2-512," \
+	"hmac-sha1"
+
+#endif /* DISABLE_NONFIPS */
 
 #define KEX_CLIENT_MAC KEX_SERVER_MAC
 

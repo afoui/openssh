@@ -9,6 +9,8 @@
 #include "includes.h"
 #include "crypto_api.h"
 
+#ifndef DISABLE_NONFIPS
+
 #include "ge25519.h"
 
 static void get_hram(unsigned char *hram, const unsigned char *sm, const unsigned char *pk, unsigned char *playground, unsigned long long smlen)
@@ -142,3 +144,5 @@ int crypto_sign_ed25519_open(
   }
   return ret;
 }
+
+#endif /* DISABLE_NONFIPS */

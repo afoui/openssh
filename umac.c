@@ -83,7 +83,7 @@
 #include "umac.h"
 #include "misc.h"
 
-#ifdef WITH_UMAC
+#ifndef DISABLE_NONFIPS
 
 /* ---------------------------------------------------------------------- */
 /* --- Primitive Data Types ---                                           */
@@ -1283,4 +1283,4 @@ int umac(struct umac_ctx *ctx, u_char *input,
 /* ---------------------------------------------------------------------- */
 /* ---------------------------------------------------------------------- */
 
-#endif /* WITH_UMAC */
+#endif /* DISABLE_NONFIPS */

@@ -32,6 +32,8 @@
 #include "ssherr.h"
 #include "ssh.h"
 
+#ifndef DISABLE_NONFIPS
+
 int
 ssh_ed25519_sign(const struct sshkey *key, u_char **sigp, size_t *lenp,
     const u_char *data, size_t datalen, u_int compat)
@@ -158,3 +160,147 @@ ssh_ed25519_verify(const struct sshkey *key,
 	free(ktype);
 	return r;
 }
+
+#else
+
+int
+ssh_ed25519_sign(const struct sshkey *key, u_char **sigp, size_t *lenp,
+    const u_char *data, size_t datalen, u_int compat)
+{
+	EVP_MD_CTX *ctx = NULL;
+	u_char *sig = NULL;
+	size_t siglen = 0, len;
+	int r;
+	struct sshbuf *b = NULL;
+
+	if (lenp != NULL)
+		*lenp = 0;
+	if (sigp != NULL)
+		*sigp = NULL;
+
+	if (key == NULL || key->pkey == NULL ||
+	    EVP_PKEY_get_base_id(key->pkey) != EVP_PKEY_ED25519 ||
+	    sshkey_type_plain(key->type) != KEY_ED25519 ||
+	    datalen >= INT_MAX - crypto_sign_ed25519_BYTES)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestSignInit_ex(ctx, NULL, NULL, NULL, NULL, key->pkey, NULL) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestSign(ctx, NULL, &siglen, NULL, 0) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if ((sig = malloc(siglen)) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (EVP_DigestSign(ctx, sig, &siglen, data, datalen) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	/* encode signature */
+	if ((b = sshbuf_new()) == NULL) {
+		r = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshbuf_put_cstring(b, "ssh-ed25519")) != 0 ||
+	    (r = sshbuf_put_string(b, sig, siglen)) != 0)
+		goto out;
+	len = sshbuf_len(b);
+	if (sigp != NULL) {
+		if ((*sigp = malloc(len)) == NULL) {
+			r = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memcpy(*sigp, sshbuf_ptr(b), len);
+	}
+	if (lenp != NULL)
+		*lenp = len;
+	/* success */
+	r = 0;
+ out:
+	sshbuf_free(b);
+	if (sig != NULL)
+		freezero(sig, siglen);
+	EVP_MD_CTX_free(ctx);
+
+	return r;
+}
+
+int
+ssh_ed25519_verify(const struct sshkey *key,
+    const u_char *signature, size_t signaturelen,
+    const u_char *data, size_t datalen, u_int compat)
+{
+	EVP_MD_CTX *ctx = NULL;
+	struct sshbuf *b = NULL;
+	char *ktype = NULL;
+	const u_char *sigblob;
+	size_t len;
+	int r;
+
+	if (key == NULL || key->pkey == NULL ||
+	    EVP_PKEY_get_base_id(key->pkey) != EVP_PKEY_ED25519 ||
+	    sshkey_type_plain(key->type) != KEY_ED25519 ||
+	    datalen >= INT_MAX - crypto_sign_ed25519_BYTES ||
+	    signature == NULL || signaturelen == 0)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	if ((b = sshbuf_from(signature, signaturelen)) == NULL)
+		return SSH_ERR_ALLOC_FAIL;
+	if ((r = sshbuf_get_cstring(b, &ktype, NULL)) != 0 ||
+	    (r = sshbuf_get_string_direct(b, &sigblob, &len)) != 0)
+		goto out;
+	if (strcmp("ssh-ed25519", ktype) != 0) {
+		r = SSH_ERR_KEY_TYPE_MISMATCH;
+		goto out;
+	}
+	if (sshbuf_len(b) != 0) {
+		r = SSH_ERR_UNEXPECTED_TRAILING_DATA;
+		goto out;
+	}
+	if (len > crypto_sign_ed25519_BYTES) {
+		r = SSH_ERR_INVALID_FORMAT;
+		goto out;
+	}
+	if (datalen >= SIZE_MAX - len) {
+		r = SSH_ERR_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	if ((ctx = EVP_MD_CTX_new()) == NULL) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerifyInit_ex(ctx, NULL, NULL, NULL, NULL, key->pkey, NULL) != 1) {
+		r = SSH_ERR_LIBCRYPTO_ERROR;
+		goto out;
+	}
+
+	if (EVP_DigestVerify(ctx, sigblob, len, data, datalen) != 1) {
+		r = SSH_ERR_SIGNATURE_INVALID;
+		goto out;
+	}
+
+	r = 0;
+
+ out:
+	EVP_MD_CTX_free(ctx);
+	sshbuf_free(b);
+	free(ktype);
+	return r;
+}
+
+#endif /* DISABLE_NONFIPS */

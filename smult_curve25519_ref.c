@@ -6,6 +6,10 @@ Public domain.
 Derived from public domain code by D. J. Bernstein.
 */
 
+#include "includes.h"
+
+#ifndef DISABLE_NONFIPS
+
 int crypto_scalarmult_curve25519(unsigned char *, const unsigned char *, const unsigned char *);
 
 static void add(unsigned int out[32],const unsigned int a[32],const unsigned int b[32])
@@ -263,3 +267,5 @@ int crypto_scalarmult_curve25519(unsigned char *q,
   for (i = 0;i < 32;++i) q[i] = work[64 + i];
   return 0;
 }
+
+#endif /* DISABLE_NONFIPS */

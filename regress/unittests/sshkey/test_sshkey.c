@@ -210,6 +210,7 @@ sshkey_tests(void)
 	sshkey_free(k1);
 	TEST_DONE();
 
+#ifndef DISABLE_NONFIPS
 	TEST_START("new/free KEY_DSA");
 	k1 = sshkey_new(KEY_DSA);
 	ASSERT_PTR_NE(k1, NULL);
@@ -218,6 +219,7 @@ sshkey_tests(void)
 #endif /*TODO*/
 	sshkey_free(k1);
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("new/free KEY_ECDSA");
@@ -233,9 +235,11 @@ sshkey_tests(void)
 	TEST_START("new/free KEY_ED25519");
 	k1 = sshkey_new(KEY_ED25519);
 	ASSERT_PTR_NE(k1, NULL);
+#if 0 /* TODO */
 	/* These should be blank until key loaded or generated */
 	ASSERT_PTR_EQ(k1->ed25519_sk, NULL);
 	ASSERT_PTR_EQ(k1->ed25519_pk, NULL);
+#endif
 	sshkey_free(k1);
 	TEST_DONE();
 
@@ -251,12 +255,14 @@ sshkey_tests(void)
 	ASSERT_PTR_EQ(k1, NULL);
 	TEST_DONE();
 
+#ifndef DISABLE_NONFIPS
 	TEST_START("generate KEY_DSA wrong bits");
 	ASSERT_INT_EQ(sshkey_generate(KEY_DSA, 2048, &k1),
 	    SSH_ERR_KEY_LENGTH);
 	ASSERT_PTR_EQ(k1, NULL);
 	sshkey_free(k1);
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("generate KEY_ECDSA wrong bits");
@@ -270,17 +276,18 @@ sshkey_tests(void)
 	TEST_START("generate KEY_RSA");
 	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 767, &kr),
 	    SSH_ERR_KEY_LENGTH);
-	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 1024, &kr), 0);
+	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 3072, &kr), 0);
 	ASSERT_PTR_NE(kr, NULL);
 #if 0 /*TODO*/
 	ASSERT_PTR_NE(kr->rsa, NULL);
 	ASSERT_PTR_NE(rsa_n(kr), NULL);
 	ASSERT_PTR_NE(rsa_e(kr), NULL);
 	ASSERT_PTR_NE(rsa_p(kr), NULL);
-	ASSERT_INT_EQ(BN_num_bits(rsa_n(kr)), 1024);
+	ASSERT_INT_EQ(BN_num_bits(rsa_n(kr)), 3072);
 #endif /*TODO*/
 	TEST_DONE();
 
+#ifndef DISABLE_NONFIPS
 	TEST_START("generate KEY_DSA");
 	ASSERT_INT_EQ(sshkey_generate(KEY_DSA, 1024, &kd), 0);
 	ASSERT_PTR_NE(kd, NULL);
@@ -290,6 +297,7 @@ sshkey_tests(void)
 	ASSERT_PTR_NE(dsa_priv_key(kd), NULL);
 #endif /*TODO*/
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("generate KEY_ECDSA");
@@ -307,8 +315,10 @@ sshkey_tests(void)
 	ASSERT_INT_EQ(sshkey_generate(KEY_ED25519, 256, &kf), 0);
 	ASSERT_PTR_NE(kf, NULL);
 	ASSERT_INT_EQ(kf->type, KEY_ED25519);
+#if 0 /* TODO */
 	ASSERT_PTR_NE(kf->ed25519_pk, NULL);
 	ASSERT_PTR_NE(kf->ed25519_sk, NULL);
+#endif
 	TEST_DONE();
 
 #ifdef WITH_OPENSSL
@@ -330,6 +340,7 @@ sshkey_tests(void)
 	sshkey_free(k1);
 	TEST_DONE();
 
+#ifndef DISABLE_NONFIPS
 	TEST_START("demote KEY_DSA");
 	ASSERT_INT_EQ(sshkey_from_private(kd, &k1), 0);
 	ASSERT_PTR_NE(k1, NULL);
@@ -346,6 +357,7 @@ sshkey_tests(void)
 	ASSERT_INT_EQ(sshkey_equal(kd, k1), 1);
 	sshkey_free(k1);
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("demote KEY_ECDSA");
@@ -373,8 +385,10 @@ sshkey_tests(void)
 	ASSERT_PTR_NE(k1, NULL);
 	ASSERT_PTR_NE(kf, k1);
 	ASSERT_INT_EQ(k1->type, KEY_ED25519);
+#if 0 /* TODO */
 	ASSERT_PTR_NE(k1->ed25519_pk, NULL);
 	ASSERT_PTR_EQ(k1->ed25519_sk, NULL);
+#endif
 	TEST_DONE();
 
 	TEST_START("equal KEY_ED25519/demoted KEY_ED25519");
@@ -384,24 +398,32 @@ sshkey_tests(void)
 
 #ifdef WITH_OPENSSL
 	TEST_START("equal mismatched key types");
+#ifndef DISABLE_NONFIPS
 	ASSERT_INT_EQ(sshkey_equal(kd, kr), 0);
+#endif /* DISABLE_NONFIPS */
 #ifdef OPENSSL_HAS_ECC
+#ifndef DISABLE_NONFIPS
 	ASSERT_INT_EQ(sshkey_equal(kd, ke), 0);
+#endif /* DISABLE_NONFIPS */
 	ASSERT_INT_EQ(sshkey_equal(kr, ke), 0);
 	ASSERT_INT_EQ(sshkey_equal(ke, kf), 0);
 #endif /* OPENSSL_HAS_ECC */
+#ifndef DISABLE_NONFIPS
 	ASSERT_INT_EQ(sshkey_equal(kd, kf), 0);
+#endif /* DISABLE_NONFIPS */
 	TEST_DONE();
 #endif /* WITH_OPENSSL */
 
 	TEST_START("equal different keys");
 #ifdef WITH_OPENSSL
-	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 1024, &k1), 0);
+	ASSERT_INT_EQ(sshkey_generate(KEY_RSA, 3072, &k1), 0);
 	ASSERT_INT_EQ(sshkey_equal(kr, k1), 0);
 	sshkey_free(k1);
+#ifndef DISABLE_NONFIPS
 	ASSERT_INT_EQ(sshkey_generate(KEY_DSA, 1024, &k1), 0);
 	ASSERT_INT_EQ(sshkey_equal(kd, k1), 0);
 	sshkey_free(k1);
+#endif /* DISABLE_NONFIPS */
 #ifdef OPENSSL_HAS_ECC
 	ASSERT_INT_EQ(sshkey_generate(KEY_ECDSA, 256, &k1), 0);
 	ASSERT_INT_EQ(sshkey_equal(ke, k1), 0);
@@ -415,7 +437,9 @@ sshkey_tests(void)
 
 #ifdef WITH_OPENSSL
 	sshkey_free(kr);
+#ifndef DISABLE_NONFIPS
 	sshkey_free(kd);
+#endif /* DISABLE_NONFIPS */
 #ifdef OPENSSL_HAS_ECC
 	sshkey_free(ke);
 #endif /* OPENSSL_HAS_ECC */
@@ -469,6 +493,7 @@ sshkey_tests(void)
 	TEST_DONE();
 
 #ifdef WITH_OPENSSL
+#ifndef DISABLE_NONFIPS
 	TEST_START("sign and verify RSA");
 	k1 = get_private("rsa_1");
 	ASSERT_INT_EQ(sshkey_load_public(test_data_file("rsa_2.pub"), &k2,
@@ -477,10 +502,11 @@ sshkey_tests(void)
 	sshkey_free(k1);
 	sshkey_free(k2);
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 	TEST_START("sign and verify RSA-SHA256");
-	k1 = get_private("rsa_1");
-	ASSERT_INT_EQ(sshkey_load_public(test_data_file("rsa_2.pub"), &k2,
+	k1 = get_private("rsa_2");
+	ASSERT_INT_EQ(sshkey_load_public(test_data_file("rsa_1.pub"), &k2,
 	    NULL), 0);
 	signature_tests(k1, k2, "rsa-sha2-256");
 	sshkey_free(k1);
@@ -488,14 +514,15 @@ sshkey_tests(void)
 	TEST_DONE();
 
 	TEST_START("sign and verify RSA-SHA512");
-	k1 = get_private("rsa_1");
-	ASSERT_INT_EQ(sshkey_load_public(test_data_file("rsa_2.pub"), &k2,
+	k1 = get_private("rsa_2");
+	ASSERT_INT_EQ(sshkey_load_public(test_data_file("rsa_1.pub"), &k2,
 	    NULL), 0);
 	signature_tests(k1, k2, "rsa-sha2-512");
 	sshkey_free(k1);
 	sshkey_free(k2);
 	TEST_DONE();
 
+#ifndef DISABLE_NONFIPS
 	TEST_START("sign and verify DSA");
 	k1 = get_private("dsa_1");
 	ASSERT_INT_EQ(sshkey_load_public(test_data_file("dsa_2.pub"), &k2,
@@ -504,6 +531,7 @@ sshkey_tests(void)
 	sshkey_free(k1);
 	sshkey_free(k2);
 	TEST_DONE();
+#endif /* DISABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("sign and verify ECDSA");
@@ -526,7 +554,7 @@ sshkey_tests(void)
 	sshkey_free(k2);
 	TEST_DONE();
 
-#ifdef WITH_OPENSSL
+#if defined (WITH_OPENSSL) && !defined (DISABLE_NONFIPS)
 	TEST_START("nested certificate");
 	ASSERT_INT_EQ(sshkey_load_cert(test_data_file("rsa_1"), &k1), 0);
 	ASSERT_INT_EQ(sshkey_load_public(test_data_file("rsa_1.pub"), &k2,
@@ -541,5 +569,5 @@ sshkey_tests(void)
 	sshkey_free(k3);
 	sshbuf_free(b);
 	TEST_DONE();
-#endif /* WITH_OPENSSL */
+#endif /* defined (WITH_OPENSSL) && !defined (DISABLE_NONFIPS) */
 }

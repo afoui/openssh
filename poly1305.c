@@ -7,6 +7,8 @@
 
 #include "includes.h"
 
+#ifndef DISABLE_NONFIPS
+
 #include <sys/types.h>
 #ifdef HAVE_STDINT_H
 # include <stdint.h>
@@ -158,3 +160,5 @@ poly1305_donna_finish:
 	U32TO8_LE(&out[ 8], f2); f3 += (f2 >> 32);
 	U32TO8_LE(&out[12], f3);
 }
+
+#endif /* DISABLE_NONFIPS */

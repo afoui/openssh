@@ -117,6 +117,9 @@
 /* Define if you don't want to use your system's login() call */
 #undef DISABLE_LOGIN
 
+/* Disable non-FIPS algorithms */
+#undef DISABLE_NONFIPS
+
 /* Define if you don't want to use pututline() etc. to write [uw]tmp */
 #undef DISABLE_PUTUTLINE
 
