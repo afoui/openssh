@@ -15,6 +15,8 @@
 
 #include "crypto_api.h"
 
+#ifdef ENABLE_NONFIPS
+
 #define int8 crypto_int8
 #define uint8 crypto_uint8
 #define int16 crypto_int16
@@ -2028,3 +2030,5 @@ badsig:
   memset(m,0,smlen);
   return -1;
 }
+
+#endif /* ENABLE_NONFIPS */

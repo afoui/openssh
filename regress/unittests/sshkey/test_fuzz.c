@@ -204,6 +204,7 @@ sshkey_fuzz_tests(void)
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("fuzz Ed25519 private");
 	buf = load_file("ed25519_1");
 	fuzz = fuzz_begin(FUZZ_BASE64, sshbuf_mutable_ptr(buf),
@@ -225,8 +226,10 @@ sshkey_fuzz_tests(void)
 	sshbuf_free(fuzzed);
 	fuzz_cleanup(fuzz);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 #ifdef WITH_OPENSSL
+#ifdef ENABLE_NONFIPS
 	TEST_START("fuzz RSA public");
 	buf = load_file("rsa_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -258,6 +261,7 @@ sshkey_fuzz_tests(void)
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("fuzz Ed25519 public");
 	buf = load_file("ed25519_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -271,8 +275,10 @@ sshkey_fuzz_tests(void)
 	public_fuzz(k1);
 	sshkey_free(k1);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 #ifdef WITH_OPENSSL
+#ifdef ENABLE_NONFIPS /* SHA1 as signing digest */
 	TEST_START("fuzz RSA sig");
 	buf = load_file("rsa_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -280,9 +286,10 @@ sshkey_fuzz_tests(void)
 	sig_fuzz(k1, "ssh-rsa");
 	sshkey_free(k1);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 	TEST_START("fuzz RSA SHA256 sig");
-	buf = load_file("rsa_1");
+	buf = load_file("rsa_2");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
 	sshbuf_free(buf);
 	sig_fuzz(k1, "rsa-sha2-256");
@@ -290,7 +297,7 @@ sshkey_fuzz_tests(void)
 	TEST_DONE();
 
 	TEST_START("fuzz RSA SHA512 sig");
-	buf = load_file("rsa_1");
+	buf = load_file("rsa_2");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
 	sshbuf_free(buf);
 	sig_fuzz(k1, "rsa-sha2-512");
@@ -308,6 +315,7 @@ sshkey_fuzz_tests(void)
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("fuzz Ed25519 sig");
 	buf = load_file("ed25519_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -315,6 +323,7 @@ sshkey_fuzz_tests(void)
 	sig_fuzz(k1, NULL);
 	sshkey_free(k1);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 /* XXX fuzz decoded new-format blobs too */
 /* XXX fuzz XMSS too */

@@ -7,15 +7,16 @@
 
 #include <stddef.h>
 #include <openssl/bn.h>
+#include <openssl/crypto.h>
 
 /* For crypto_sign_ed25519_PUBLICKEYBYTES, crypto_sign_ed25519_SECRETKEYBYTES */
 #include "crypto_api.h"
 
 #ifndef ED25519_SK_SZ
-#define        ED25519_SK_SZ   crypto_sign_ed25519_SECRETKEYBYTES
+#define	ED25519_SK_SZ	crypto_sign_ed25519_SECRETKEYBYTES
 #endif /* ED25519_SK_SZ */
 #ifndef ED25519_PK_SZ
-#define        ED25519_PK_SZ   crypto_sign_ed25519_PUBLICKEYBYTES
+#define	ED25519_PK_SZ	crypto_sign_ed25519_PUBLICKEYBYTES
 #endif /* ED25519_PK_SZ */
 
 /* From PKCS #1 RSAPrivateKey */

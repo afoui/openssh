@@ -2222,6 +2222,21 @@ AC_LINK_IFELSE(
 	[AC_DEFINE([HAVE_ISBLANK], [1], [Define if you have isblank(3C).])
 ])
 
+dnl Disable non-FIPS algorithms and code
+disable_nonfips=no
+AC_ARG_ENABLE([nonfips],
+	[  --disable-nonfips       disable non-FIPS code [[no]]],
+	[
+		if test "x$enableval" = "xno" ; then
+			disable_nonfips=yes
+		fi
+	]
+)
+
+if test "x$disable_nonfips" = "xyes" && test "x$openssl" = "xno" ; then
+	AC_MSG_ERROR([--disable-nonfips requires OpenSSL.])
+fi
+
 disable_pkcs11=
 AC_ARG_ENABLE([pkcs11],
 	[  --disable-pkcs11        disable PKCS#11 support code [no]],
@@ -2949,6 +2964,9 @@ AC_ARG_WITH([ssl-engine],
 			if test "x$openssl" = "xno" ; then
 				AC_MSG_ERROR([cannot use --with-ssl-engine when OpenSSL disabled])
 			fi
+			if test "x$disable_nonfips" = "xyes" ; then
+				AC_MSG_ERROR([cannot use --with-ssl-engine with --disable-nonfips])
+			fi
 			openssl_engine=yes
 		fi
 	]
@@ -3187,6 +3205,10 @@ if test "x$openssl" = "xyes" ; then
 	fi
 	AC_DEFINE_UNQUOTED(WITH_OPENSSL_V3, [$with_openssl_v3], [Use OpenSSL V3 EVP API])
 
+	if test "x$disable_nonfips" = xyes && test "x$with_openssl_v3" = x0 ; then
+		AC_MSG_ERROR([--disable-nonfips requires OpenSSL v3 API])
+	fi
+
 	AC_CHECK_FUNCS([ \
 		DES_crypt \
 		EVP_DigestSign \
@@ -3373,6 +3395,34 @@ if test "x$openssl" = "xyes" ; then
 		]
 	)
 fi
+
+# Non-FIPS crypto
+enable_nonfips=yes
+if test "x$disable_nonfips" = "xyes" ; then
+	enable_nonfips="disabled by user"
+fi
+
+AC_MSG_CHECKING([whether to enable non-FIPS code])
+if test "x$enable_nonfips" = "xyes" ; then
+	AC_DEFINE([ENABLE_NONFIPS], [], [Enable non-FIPS code])
+	AC_SUBST([ENABLE_NONFIPS], [1])
+else
+	AC_SUBST([ENABLE_NONFIPS], [], [Enable non-FIPS code])
+	:
+fi
+AC_MSG_RESULT([$enable_nonfips])
+
+test_ssh_rsa=no
+if test "x$openssl" = "xyes" ; then
+	test_ssh_rsa=yes
+fi
+AC_SUBST([TEST_SSH_RSA], [$test_ssh_rsa])
+
+test_ssh_ed25519=yes
+if test "x$enable_nonfips" != "xyes" ; then
+	test_ssh_ed25519=no
+fi
+AC_SUBST([TEST_SSH_ED25519], [$test_ssh_ed25519])
 
 # PKCS11/U2F depend on OpenSSL and dlopen().
 enable_pkcs11=yes
@@ -5878,6 +5928,7 @@ echo "           Translate v4 in v6 hack: $IPV4_IN6_HACK_MSG"
 echo "                  BSD Auth support: $BSD_AUTH_MSG"
 echo "              Random number source: $RAND_MSG"
 echo "             Privsep sandbox style: $SANDBOX_STYLE"
+echo "                     Non-FIPS code: $enable_nonfips"
 echo "                   PKCS#11 support: $enable_pkcs11"
 echo "                  U2F/FIDO support: $enable_sk"
 

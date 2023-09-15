@@ -11,8 +11,8 @@ rm -f $OBJ/authorized_principals_$USER $OBJ/cert_user_key*
 mv $OBJ/sshd_proxy $OBJ/sshd_proxy.orig
 mv $OBJ/ssh_proxy $OBJ/ssh_proxy.orig
 
-ktype1=ed25519; ktype2=ed25519; ktype3=ed25519;
-ktype4=ed25519; ktype5=ed25519; ktype6=ed25519;
+ktype1="$SSH_FAST_KEY_TYPE"; ktype2="$SSH_FAST_KEY_TYPE"; ktype3="$SSH_FAST_KEY_TYPE";
+ktype4="$SSH_FAST_KEY_TYPE"; ktype5="$SSH_FAST_KEY_TYPE"; ktype6="$SSH_FAST_KEY_TYPE";
 for t in $SSH_KEYTYPES ; do 
 	case "$t" in
 		ssh-rsa)	ktype2=rsa ;;
@@ -74,6 +74,7 @@ keytype() {
 	case "$1" in
 		ecdsa)		printf "ecdsa-sha2-*" ;;
 		ed25519)	printf "ssh-ed25519" ;;
+		ecdsa-sha2-nistp256) printf "ecdsa-sha2-nistp256" ;;
 		rsa)		printf "rsa-sha2-256,rsa-sha2-512,ssh-rsa" ;;
 		sk-ecdsa)	printf "sk-ecdsa-*" ;;
 		sk-ssh-ed25519)	printf "sk-ssh-ed25519-*" ;;

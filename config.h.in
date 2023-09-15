@@ -138,6 +138,9 @@
 /* Define if you don't want to use wtmpx */
 #undef DISABLE_WTMPX
 
+/* Enable non-FIPS code */
+#undef ENABLE_NONFIPS
+
 /* Enable for PKCS#11 support */
 #undef ENABLE_PKCS11
 

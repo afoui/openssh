@@ -11,9 +11,9 @@ rm -f $OBJ/ssh_proxy[._]* $OBJ/command
 
 verbose "generate keys"
 for h in a b c d e x ca ; do
-	$SSHKEYGEN -q -t ed25519 -C host_$h -N '' -f $OBJ/host_$h || \
+	$SSHKEYGEN -q -t $SSH_FAST_KEY_TYPE -C host_$h -N '' -f $OBJ/host_$h || \
 		fatal "ssh-keygen hostkey failed"
-	$SSHKEYGEN -q -t ed25519 -C user_$h -N '' -f $OBJ/user_$h || \
+	$SSHKEYGEN -q -t $SSH_FAST_KEY_TYPE -C user_$h -N '' -f $OBJ/user_$h || \
 		fatal "ssh-keygen userkey failed"
 done
 
@@ -316,6 +316,12 @@ restore_privatekeys
 # multihop tests. Believe me, this is easier than getting the escaping
 # right for 5 hops on the command-line...
 prepare_multihop_script() {
+	case "$SSH_FAST_KEY_TYPE" in
+		ed25519) _pat="^ssh" ;;
+		ecdsa-sha2-nistp*) _pat="^ecdsa" ;;
+		*) fail "unsupported key type $SSH_FAST_KEY_TYPE"
+	esac
+
 	MULTIHOP_RUN=$OBJ/command
 	cat << _EOF > $MULTIHOP_RUN
 #!/bin/sh
@@ -329,7 +335,7 @@ if test ! -z "\$me" ; then
 	cat \$SSH_USER_AUTH
 fi
 echo AGENT
-$SSHADD -L | egrep "^ssh" | cut -d" " -f-2 | env LC_ALL=C sort
+$SSHADD -L | egrep "$_pat" | cut -d" " -f-2 | env LC_ALL=C sort
 if test -z "\$next" ; then 
 	touch $OBJ/done
 	echo "FINISH"

@@ -51,6 +51,7 @@
 #include "match.h"
 #include "misc.h"
 #include "xmalloc.h"
+#include "log.h"
 
 #define BENCH_FAST_DEADLINE	1
 #define BENCH_NORMAL_DEADLINE	10
@@ -205,8 +206,10 @@ main(int argc, char **argv)
 	setvbuf(stdout, NULL, _IONBF, 0);
 	if (!quiet_mode)
 		printf("%s: ", __progname);
-	if (verbose_mode)
+	if (verbose_mode) {
 		printf("\n");
+		log_init(__progname, SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_USER, 1);
+	}
 
 	if (benchmark)
 		benchmarks();

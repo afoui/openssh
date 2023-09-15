@@ -85,9 +85,11 @@ struct sshcipher {
 
 static const struct sshcipher ciphers[] = {
 #ifdef WITH_OPENSSL
+#ifdef ENABLE_NONFIPS
 #ifndef OPENSSL_NO_DES
 	{ "3des-cbc",		8, 24, 0, 0, CFLAG_CBC, EVP_des_ede3_cbc },
 #endif
+#endif /* ENABLE_NONFIPS */
 	{ "aes128-cbc",		16, 16, 0, 0, CFLAG_CBC, EVP_aes_128_cbc },
 	{ "aes192-cbc",		16, 24, 0, 0, CFLAG_CBC, EVP_aes_192_cbc },
 	{ "aes256-cbc",		16, 32, 0, 0, CFLAG_CBC, EVP_aes_256_cbc },
@@ -103,8 +105,10 @@ static const struct sshcipher ciphers[] = {
 	{ "aes192-ctr",		16, 24, 0, 0, CFLAG_AESCTR, NULL },
 	{ "aes256-ctr",		16, 32, 0, 0, CFLAG_AESCTR, NULL },
 #endif
+#ifdef ENABLE_NONFIPS
 	{ "chacha20-poly1305@openssh.com",
 				8, 64, 0, 16, CFLAG_CHACHAPOLY, NULL },
+#endif /* ENABLE_NONFIPS */
 	{ "none",		8, 0, 0, 0, CFLAG_NONE, NULL },
 
 	{ NULL,			0, 0, 0, 0, 0, NULL }
@@ -259,11 +263,13 @@ cipher_init(struct sshcipher_ctx **ccp, const struct sshcipher *cipher,
 	}
 
 	cc->cipher = cipher;
+#ifdef ENABLE_NONFIPS
 	if ((cc->cipher->flags & CFLAG_CHACHAPOLY) != 0) {
 		cc->cp_ctx = chachapoly_new(key, keylen);
 		ret = cc->cp_ctx != NULL ? 0 : SSH_ERR_INVALID_ARGUMENT;
 		goto out;
 	}
+#endif /* ENABLE_NONFIPS */
 	if ((cc->cipher->flags & CFLAG_NONE) != 0) {
 		ret = 0;
 		goto out;
@@ -336,10 +342,12 @@ int
 cipher_crypt(struct sshcipher_ctx *cc, u_int seqnr, u_char *dest,
    const u_char *src, u_int len, u_int aadlen, u_int authlen)
 {
+#ifdef ENABLE_NONFIPS
 	if ((cc->cipher->flags & CFLAG_CHACHAPOLY) != 0) {
 		return chachapoly_crypt(cc->cp_ctx, seqnr, dest, src,
 		    len, aadlen, authlen, cc->encrypt);
 	}
+#endif /* ENABLE_NONFIPS */
 	if ((cc->cipher->flags & CFLAG_NONE) != 0) {
 		memcpy(dest, src, aadlen + len);
 		return 0;
@@ -399,9 +407,11 @@ int
 cipher_get_length(struct sshcipher_ctx *cc, u_int *plenp, u_int seqnr,
     const u_char *cp, u_int len)
 {
+#ifdef ENABLE_NONFIPS
 	if ((cc->cipher->flags & CFLAG_CHACHAPOLY) != 0)
 		return chachapoly_get_length(cc->cp_ctx, plenp, seqnr,
 		    cp, len);
+#endif /* ENABLE_NONFIPS */
 	if (len < 4)
 		return SSH_ERR_MESSAGE_INCOMPLETE;
 	*plenp = PEEK_U32(cp);
@@ -413,10 +423,13 @@ cipher_free(struct sshcipher_ctx *cc)
 {
 	if (cc == NULL)
 		return;
+#ifdef ENABLE_NONFIPS
 	if ((cc->cipher->flags & CFLAG_CHACHAPOLY) != 0) {
 		chachapoly_free(cc->cp_ctx);
 		cc->cp_ctx = NULL;
-	} else if ((cc->cipher->flags & CFLAG_AESCTR) != 0)
+	} else
+#endif /* ENABLE_NONFIPS */
+	if ((cc->cipher->flags & CFLAG_AESCTR) != 0)
 		explicit_bzero(&cc->ac_ctx, sizeof(cc->ac_ctx));
 #ifdef WITH_OPENSSL
 	EVP_CIPHER_CTX_free(cc->evp);

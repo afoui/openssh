@@ -28,6 +28,8 @@
 
 #include "includes.h"
 
+#ifdef ENABLE_NONFIPS
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -1127,3 +1129,5 @@ rijndaelDecrypt(const u32 rk[/*4*(Nr + 1)*/], int Nr, const u8 ct[16],
 	PUTU32(pt + 12, s3);
 }
 #endif
+
+#endif /* ENABLE_NONFIPS */

@@ -675,6 +675,9 @@ SSH_PRIVSEP_USER
 SK_STANDALONE
 LIBFIDO2
 SK_DUMMY_LIBRARY
+TEST_SSH_ED25519
+TEST_SSH_RSA
+ENABLE_NONFIPS
 OPENSSL_BIN
 openssl_bin
 PICFLAG
@@ -794,6 +797,7 @@ with_libedit
 with_wtmpdb
 with_audit
 with_pie
+enable_nonfips
 enable_pkcs11
 enable_security_key
 with_security_key_builtin
@@ -1467,6 +1471,7 @@ Optional Features:
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
   --disable-largefile     omit support for large files
+  --disable-nonfips       disable non-FIPS code [no]
   --disable-pkcs11        disable PKCS#11 support code [no]
   --disable-security-key  disable U2F/FIDO support code no
   --disable-osslv3api     disable use of OpenSSL v3 API [no]
@@ -18051,6 +18056,23 @@ fi
 rm -f core conftest.err conftest.$ac_objext conftest.beam \
     conftest$ac_exeext conftest.$ac_ext
 
+disable_nonfips=no
+# Check whether --enable-nonfips was given.
+if test ${enable_nonfips+y}
+then :
+  enableval=$enable_nonfips;
+		if test "x$enableval" = "xno" ; then
+			disable_nonfips=yes
+		fi
+
+
+fi
+
+
+if test "x$disable_nonfips" = "xyes" && test "x$openssl" = "xno" ; then
+	as_fn_error $? "--disable-nonfips requires OpenSSL." "$LINENO" 5
+fi
+
 disable_pkcs11=
 # Check whether --enable-pkcs11 was given.
 if test ${enable_pkcs11+y}
@@ -19922,6 +19944,9 @@ then :
 			if test "x$openssl" = "xno" ; then
 				as_fn_error $? "cannot use --with-ssl-engine when OpenSSL disabled" "$LINENO" 5
 			fi
+			if test "x$disable_nonfips" = "xyes" ; then
+				as_fn_error $? "cannot use --with-ssl-engine with --disable-nonfips" "$LINENO" 5
+			fi
 			openssl_engine=yes
 		fi
 
@@ -20348,6 +20373,10 @@ rm -f core conftest.err conftest.$ac_objext conftest.beam \
 
 printf "%s\n" "#define WITH_OPENSSL_V3 $with_openssl_v3" >>confdefs.h
 
+
+	if test "x$disable_nonfips" = xyes && test "x$with_openssl_v3" = x0 ; then
+		as_fn_error $? "--disable-nonfips requires OpenSSL v3 API" "$LINENO" 5
+	fi
 
 	ac_fn_c_check_func "$LINENO" "DES_crypt" "ac_cv_func_DES_crypt"
 if test "x$ac_cv_func_DES_crypt" = xyes
@@ -20813,6 +20842,41 @@ fi
 rm -f core conftest.err conftest.$ac_objext conftest.beam \
     conftest$ac_exeext conftest.$ac_ext
 fi
+
+# Non-FIPS crypto
+enable_nonfips=yes
+if test "x$disable_nonfips" = "xyes" ; then
+	enable_nonfips="disabled by user"
+fi
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to enable non-FIPS code" >&5
+printf %s "checking whether to enable non-FIPS code... " >&6; }
+if test "x$enable_nonfips" = "xyes" ; then
+
+printf "%s\n" "#define ENABLE_NONFIPS /**/" >>confdefs.h
+
+	ENABLE_NONFIPS=1
+
+else
+
+	:
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $enable_nonfips" >&5
+printf "%s\n" "$enable_nonfips" >&6; }
+
+test_ssh_rsa=no
+if test "x$openssl" = "xyes" ; then
+	test_ssh_rsa=yes
+fi
+TEST_SSH_RSA=$test_ssh_rsa
+
+
+test_ssh_ed25519=yes
+if test "x$enable_nonfips" != "xyes" ; then
+	test_ssh_ed25519=no
+fi
+TEST_SSH_ED25519=$test_ssh_ed25519
+
 
 # PKCS11/U2F depend on OpenSSL and dlopen().
 enable_pkcs11=yes
@@ -29296,6 +29360,7 @@ echo "           Translate v4 in v6 hack: $IPV4_IN6_HACK_MSG"
 echo "                  BSD Auth support: $BSD_AUTH_MSG"
 echo "              Random number source: $RAND_MSG"
 echo "             Privsep sandbox style: $SANDBOX_STYLE"
+echo "                     Non-FIPS code: $enable_nonfips"
 echo "                   PKCS#11 support: $enable_pkcs11"
 echo "                  U2F/FIDO support: $enable_sk"
 

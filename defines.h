@@ -988,7 +988,7 @@ struct winsize {
  * sntrup761 uses variable length arrays and c99-style declarations after code,
  * so only enable if the compiler supports them.
  */
-#if defined(VARIABLE_LENGTH_ARRAYS) && defined(VARIABLE_DECLARATION_AFTER_CODE)
+#if defined(VARIABLE_LENGTH_ARRAYS) && defined(VARIABLE_DECLARATION_AFTER_CODE) && defined(ENABLE_NONFIPS)
 # define USE_SNTRUP761X25519	1
 /* The ML-KEM768 implementation also uses C89 features */
 # define USE_MLKEM768X25519	1

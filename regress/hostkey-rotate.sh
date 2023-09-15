@@ -31,10 +31,19 @@ echo "UpdateHostkeys=yes" >> $OBJ/ssh_proxy
 echo "GlobalKnownHostsFile=none" >> $OBJ/ssh_proxy
 rm $OBJ/known_hosts
 
-# The "primary" key type is ed25519 since it's supported even when built
-# without OpenSSL.  The secondary is RSA if it's supported.
-primary="ssh-ed25519"
-secondary="$primary"
+case "$SSH_FAST_KEY_TYPE" in
+	ed25519)
+		# The "primary" key type is ed25519 since it's supported even when built
+		# without OpenSSL.  The secondary is RSA if it's supported.
+		primary="ssh-ed25519"
+		secondary="$primary"
+		;;
+	ecdsa-sha2-nistp*)
+		primary="$SSH_FAST_KEY_TYPE"
+		secondary="$primary"
+		;;
+	*) fail "unsupported key type $SSH_FAST_KEY_TYPE" ;;
+esac
 
 trace "prepare hostkeys"
 nkeys=0

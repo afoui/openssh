@@ -99,6 +99,13 @@ check(struct hostkey_foreach_line *l, void *_ctx)
 	    expected->no_parse_keytype == KEY_ECDSA)
 		skip = 1;
 #endif /* WITH_OPENSSL */
+#ifndef ENABLE_NONFIPS
+	if (expected->l.keytype == KEY_DSA ||
+	    expected->no_parse_keytype == KEY_DSA ||
+	    expected->l.keytype == KEY_ED25519 ||
+	    expected->no_parse_keytype == KEY_ED25519)
+		skip = 1;
+#endif /* ENABLE_NONFIPS */
 	if (skip) {
 		expected_status = HKF_STATUS_INVALID;
 		expected_keytype = KEY_UNSPEC;
@@ -158,6 +165,11 @@ prepare_expected(struct expected *expected, size_t n)
 			continue;
 		}
 #endif /* WITH_OPENSSL */
+#ifndef ENABLE_NONFIPS
+		if (expected[i].l.keytype == KEY_DSA || expected[i].l.keytype == KEY_ED25519)
+			continue;
+#endif /* ENABLE_NONFIPS */
+
 		ASSERT_INT_EQ(sshkey_load_public(
 		    test_data_file(expected[i].key_file), &expected[i].l.key,
 		    NULL), 0);

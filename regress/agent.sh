@@ -27,7 +27,15 @@ if [ $? -ne 1 ]; then
 fi
 
 rm -f $OBJ/user_ca_key $OBJ/user_ca_key.pub
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_ca_key \
+
+keytype=$SSH_FAST_KEY_TYPE
+case $keytype in
+	ed25519) keyname=ssh-ed25519 ;;
+	ecdsa-sha2-nistp256) keyname=$keytype ;;
+	*) fail "unsupported key type $SSH_FAST_KEY_TYPE" ;;
+esac
+
+${SSHKEYGEN} -q -N '' -t "$keytype" -f $OBJ/user_ca_key \
 	|| fatal "ssh-keygen failed"
 
 trace "overwrite authorized keys"
@@ -214,32 +222,32 @@ check_key_present() {
 	fi
 }
 
-# delete the ed25519 key
+# delete the ed25519/sha2-nistp256 key
 trace "delete single key by file"
-${SSHADD} -qdk $OBJ/ssh-ed25519-agent || fail "ssh-add -d ed25519 failed"
-check_key_absent ssh-ed25519
-check_key_present ssh-ed25519-cert-v01@openssh.com
+${SSHADD} -qdk $OBJ/${keyname}-agent || fail "ssh-add -d ${keytype} failed"
+check_key_absent ${keyname}
+check_key_present ${keyname}-cert-v01@openssh.com
 # Put key/cert back.
-${SSHADD} $OBJ/ssh-ed25519-agent-private >/dev/null 2>&1 || \
+${SSHADD} $OBJ/${keyname}-agent-private >/dev/null 2>&1 || \
 	fail "ssh-add failed exit code $?"
-check_key_present ssh-ed25519
+check_key_present ${keyname}
 # Delete both key and certificate.
 trace "delete key/cert by file"
-${SSHADD} -qd $OBJ/ssh-ed25519-agent || fail "ssh-add -d ed25519 failed"
-check_key_absent ssh-ed25519
-check_key_absent ssh-ed25519-cert-v01@openssh.com
+${SSHADD} -qd $OBJ/${keyname}-agent || fail "ssh-add -d ${keytype} failed"
+check_key_absent ${keyname}
+check_key_absent ${keyname}-cert-v01@openssh.com
 # Put key/cert back.
-${SSHADD} $OBJ/ssh-ed25519-agent-private >/dev/null 2>&1 || \
+${SSHADD} $OBJ/${keyname}-agent-private >/dev/null 2>&1 || \
 	fail "ssh-add failed exit code $?"
-check_key_present ssh-ed25519
+check_key_present ${keyname}
 # Delete certificate via stdin
-${SSHADD} -qd - < $OBJ/ssh-ed25519-agent-cert.pub || fail "ssh-add -d - failed"
-check_key_present ssh-ed25519
-check_key_absent ssh-ed25519-cert-v01@openssh.com
+${SSHADD} -qd - < $OBJ/${keyname}-agent-cert.pub || fail "ssh-add -d - failed"
+check_key_present ${keyname}
+check_key_absent ${keyname}-cert-v01@openssh.com
 # Delete key via stdin
-${SSHADD} -qd - < $OBJ/ssh-ed25519-agent.pub || fail "ssh-add -d - failed"
-check_key_absent ssh-ed25519
-check_key_absent ssh-ed25519-cert-v01@openssh.com
+${SSHADD} -qd - < $OBJ/${keyname}-agent.pub || fail "ssh-add -d - failed"
+check_key_absent ${keyname}
+check_key_absent ${keyname}-cert-v01@openssh.com
 
 trace "kill agent"
 ${SSHAGENT} -k > /dev/null

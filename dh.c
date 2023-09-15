@@ -803,6 +803,8 @@ dh_new_group_fallback(int max)
 
 #endif /* WITH_OPENSSL_V3 */
 
+#ifdef ENABLE_NONFIPS
+
 static int
 parse_prime(int linenum, char *line, struct dhgroup *dhg)
 {
@@ -980,6 +982,8 @@ static int choose_dhgroup(int min, int wantbits, int max, struct dhgroup *dhg)
 	return 0;
 }
 
+#endif /* ENABLE_NONFIPS */
+
 SSH_DH_KEY *
 choose_dh(int min, int wantbits, int max)
 {
@@ -987,7 +991,12 @@ choose_dh(int min, int wantbits, int max)
 	int r;
 
 	memset(&dhg, 0, sizeof dhg);
+#ifdef ENABLE_NONFIPS
 	r = choose_dhgroup(min, wantbits, max, &dhg);
+#else
+	/* choose_dhgroup generally returns FIPS-incompatible DH groups */
+	r = -1;
+#endif
 	if (r != 0)
 		return dh_new_group_fallback(max);
 

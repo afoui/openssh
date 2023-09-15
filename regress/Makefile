@@ -2,7 +2,15 @@
 
 tests:		prep file-tests t-exec unit
 
+ifneq "$(ENABLE_NONFIPS)" ""
 REGRESS_TARGETS=	t1 t2 t3 t4 t5 t7 t9 t10 t11 t12
+else
+# Non-FIPS tests:
+# t1: signing with digest=SHA-1
+# t4: MD5
+# t10: Non-FIPS-approved Ed25519
+REGRESS_TARGETS=	t2 t3 t5 t7 t9 t11 t12
+endif
 
 # File based tests
 file-tests: $(REGRESS_TARGETS)
@@ -230,7 +238,12 @@ t11:
 	fi
 
 $(OBJ)/t12.out:
-	${TEST_SSH_SSHKEYGEN} -q -t ed25519 -N '' -C 'test-comment-1234' -f $@
+	if ${TEST_SSH_SSH} -Q key-plain | grep ed25519 >/dev/null; then \
+		ktype=ed25519; \
+	else \
+		ktype=ecdsa-sha2-nistp256; \
+	fi; \
+	${TEST_SSH_SSHKEYGEN} -q -t "$$ktype" -N '' -C 'test-comment-1234' -f $@
 
 t12: $(OBJ)/t12.out
 	${TEST_SSH_SSHKEYGEN} -lf $(OBJ)/t12.out.pub | grep test-comment-1234 >/dev/null
@@ -292,11 +305,17 @@ unit unit-bench:
 		 $$V ${.OBJDIR}/unittests/sshkey/test_sshkey \
 			-d ${.CURDIR}/unittests/sshkey/testdata $${ARGS}; \
 		$$V ${.OBJDIR}/unittests/sshsig/test_sshsig \
-			-d ${.CURDIR}/unittests/sshsig/testdata $${ARGS}; \
-		$$V ${.OBJDIR}/unittests/authopt/test_authopt \
-			-d ${.CURDIR}/unittests/authopt/testdata $${ARGS}; \
-		$$V ${.OBJDIR}/unittests/bitmap/test_bitmap $${ARGS}; \
-		$$V ${.OBJDIR}/unittests/conversion/test_conversion $${ARGS}; \
+			-d ${.CURDIR}/unittests/sshsig/testdata ; \
+		if test "x${TEST_SSH_ED25519}" = "xyes" ; then \
+			$$V ${.OBJDIR}/unittests/authopt/test_authopt \
+				-d ${.CURDIR}/unittests/authopt/testdata ; \
+		fi ; \
+		if test "x${TEST_SSH_RSA}" = "xyes" ; then \
+			$$V ${.OBJDIR}/unittests/authopt/test_authopt \
+				-d ${.CURDIR}/unittests/authopt/testdata-rsa ; \
+		fi ; \
+		$$V ${.OBJDIR}/unittests/bitmap/test_bitmap ; \
+		$$V ${.OBJDIR}/unittests/conversion/test_conversion ; \
 		$$V ${.OBJDIR}/unittests/kex/test_kex $${ARGS}; \
 		$$V ${.OBJDIR}/unittests/hostkeys/test_hostkeys \
 			-d ${.CURDIR}/unittests/hostkeys/testdata $${ARGS}; \

@@ -72,6 +72,7 @@ LDFLAGS_NOPIE=-L. -Lopenbsd-compat/ @LDFLAGS_NOPIE@
 EXEEXT=@EXEEXT@
 MANFMT=@MANFMT@
 MKDIR_P=@MKDIR_P@
+ENABLE_NONFIPS=@ENABLE_NONFIPS@
 
 .SUFFIXES: .lo
 
@@ -775,6 +776,9 @@ unit: regress-unit-binaries
 		.CURDIR="$(abs_top_srcdir)/regress" \
 		.OBJDIR="$(BUILDDIR)/regress" \
 		OBJ="$(BUILDDIR)/regress" \
+		TEST_SSH_UTF8="@TEST_SSH_UTF8@" \
+		TEST_SSH_ED25519="@TEST_SSH_ED25519@" \
+		TEST_SSH_RSA="@TEST_SSH_RSA@" \
 		$@ && echo $@ tests passed
 
 unit-bench: regress-unit-binaries
@@ -796,6 +800,7 @@ interop-tests t-exec file-tests extra-tests: regress-prep regress-binaries $(TAR
 		BUILDDIR="$(BUILDDIR)" \
 		OBJ="$(BUILDDIR)/regress" \
 		PATH="$(BUILDDIR):$${PATH}" \
+		ENABLE_NONFIPS="$(ENABLE_NONFIPS)" \
 		TEST_ENV=MALLOC_OPTIONS="@TEST_MALLOC_OPTIONS@" \
 		TEST_MALLOC_OPTIONS="@TEST_MALLOC_OPTIONS@" \
 		TEST_SSH_SCP="$(BUILDDIR)/scp" \
@@ -821,7 +826,6 @@ interop-tests t-exec file-tests extra-tests: regress-prep regress-binaries $(TAR
 		TEST_SSH_DROPBEARCONVERT="@DROPBEARCONVERT@" \
 		TEST_SSH_DBCLIENT="@DBCLIENT@" \
 		TEST_SSH_IPV6="@TEST_SSH_IPV6@" \
-		TEST_SSH_UTF8="@TEST_SSH_UTF8@" \
 		TEST_SHELL="$(TEST_SHELL)" \
 		EXEEXT="$(EXEEXT)" \
 		$@ && echo all $@ passed

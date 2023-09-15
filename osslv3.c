@@ -206,7 +206,7 @@ ssh_rsa_key_params_deinit(struct ssh_rsa_key_params *kp)
 	BN_clear_free(kp->p);
 	BN_clear_free(kp->q);
 	BN_clear_free(kp->iqmp);
-	memset(kp, 0, sizeof *kp);
+	explicit_bzero(kp, sizeof *kp);
 }
 
 int
@@ -283,7 +283,7 @@ ssh_dsa_new_pkey(const struct ssh_dsa_key_params *kp, EVP_PKEY **pkeyp)
 		goto out;
 
 #ifdef DEBUG_PK
-	EVP_PKEY_print_private_fp(stdout, *pkeyp, 8, NULL);
+	EVP_PKEY_print_private_fp(stderr, *pkeyp, 8, NULL);
 #endif
 
 	r = 0;
@@ -305,7 +305,7 @@ ssh_dsa_key_params_deinit(struct ssh_dsa_key_params *kp)
 	BN_clear_free(kp->q);
 	BN_clear_free(kp->pub_key);
 	BN_clear_free(kp->priv_key);
-	memset(kp, 0, sizeof *kp);
+	explicit_bzero(kp, sizeof *kp);
 }
 
 int
@@ -388,7 +388,7 @@ ssh_ec_new_pkey(const struct ssh_ec_key_params *kp, EVP_PKEY **pkeyp)
 		goto out;
 
 #ifdef DEBUG_PK
-	EVP_PKEY_print_private_fp(stdout, *pkeyp, 8, NULL);
+	EVP_PKEY_print_private_fp(stderr, *pkeyp, 8, NULL);
 #endif
 
 	r = 0;
@@ -407,7 +407,7 @@ ssh_ec_key_params_deinit(struct ssh_ec_key_params *kp)
 {
 	freezero(kp->pub, kp->pub_len);
 	BN_clear_free(kp->exponent);
-	memset(kp, 0, sizeof *kp);
+	explicit_bzero(kp, sizeof *kp);
 }
 
 int
@@ -453,9 +453,9 @@ ssh_get_ed25519_key_params(EVP_PKEY *pkey, struct ssh_ed25519_key_params *kp, in
 	return ret;
 }
 
-	int
-	ssh_ed25519_new_pkey(const struct ssh_ed25519_key_params *kp, int priv, EVP_PKEY **pkeyp)
-	{
+int
+ssh_ed25519_new_pkey(const struct ssh_ed25519_key_params *kp, int priv, EVP_PKEY **pkeyp)
+{
 	EVP_PKEY_CTX *ctx = NULL;
 	OSSL_PARAM_BLD *param_bld = NULL;
 	OSSL_PARAM *param = NULL;

@@ -8,7 +8,7 @@ CFLAGS=-D_GNU_SOURCE=1 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-exception
 CXXFLAGS=$(CFLAGS) $(FUZZ_FLAGS)
 LDFLAGS=-L ../../.. -L ../../../openbsd-compat -g
 COMMON_OBJS=../../../ssh-pkcs11-client.o
-LIBS=$(COMMON_OBJS) -lssh -lopenbsd-compat -lmd -lcrypto -lfido2 -lcbor $(FUZZ_LIBS)
+LIBS=$(COMMON_OBJS) -Wl,--start-group,-lssh,-lopenbsd-compat,--end-group -lmd -lcrypto -lfido2 -lcbor $(FUZZ_LIBS)
 SK_NULL_OBJS=ssh-sk-null.o
 COMMON_DEPS=../../../libssh.a $(COMMON_OBJS)
 

@@ -247,7 +247,14 @@ list_hostkey_types(void)
 			/* for RSA we also support SHA2 signatures */
 			append_hostkey_type(b, "rsa-sha2-512");
 			append_hostkey_type(b, "rsa-sha2-256");
-			/* FALLTHROUGH */
+			/*
+			 * FIPS: do not add sshkey_ssh_name(key), i.e. ssh-rsa, since its
+			 * associated digest, SHA-1, is not allowed for signing.
+			 */
+#ifdef ENABLE_NONFIPS
+			append_hostkey_type(b, sshkey_ssh_name(key));
+#endif /* ENABLE_NONFIPS */
+			break;
 		case KEY_ECDSA:
 		case KEY_ED25519:
 		case KEY_ECDSA_SK:
@@ -266,7 +273,15 @@ list_hostkey_types(void)
 			    "rsa-sha2-512-cert-v01@openssh.com");
 			append_hostkey_type(b,
 			    "rsa-sha2-256-cert-v01@openssh.com");
-			/* FALLTHROUGH */
+			/*
+			 * FIPS: do not add sshkey_ssh_name(key),
+			 * i.e. ssh-rsa-cert-v01@openssh.com, since its
+			 * associated digest, SHA-1, is not allowed for signing.
+			 */
+#ifdef ENABLE_NONFIPS
+			append_hostkey_type(b, sshkey_ssh_name(key));
+#endif /* ENABLE_NONFIPS */
+			break;
 		case KEY_ECDSA_CERT:
 		case KEY_ED25519_CERT:
 		case KEY_ECDSA_SK_CERT:

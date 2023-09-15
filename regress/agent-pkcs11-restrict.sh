@@ -11,7 +11,7 @@ rm -f $OBJ/ssh_proxy[._]* $OBJ/command $OBJ/authorized_keys_*
 
 trace "generate host keys"
 for h in a b x ca ; do
-	$SSHKEYGEN -q -t ed25519 -C host_$h -N '' -f $OBJ/host_$h || \
+	$SSHKEYGEN -q -t "$SSH_FAST_KEY_TYPE" -C host_$h -N '' -f $OBJ/host_$h || \
 		fatal "ssh-keygen hostkey failed"
 done
 

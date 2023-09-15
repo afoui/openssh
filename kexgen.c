@@ -114,6 +114,7 @@ kex_gen_client(struct ssh *ssh)
 		r = kex_ecdh_keypair(kex);
 		break;
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 	case KEX_C25519_SHA256:
 		r = kex_c25519_keypair(kex);
 		break;
@@ -123,6 +124,7 @@ kex_gen_client(struct ssh *ssh)
 	case KEX_KEM_MLKEM768X25519_SHA256:
 		r = kex_kem_mlkem768x25519_keypair(kex);
 		break;
+#endif /* ENABLE_NONFIPS */
 	default:
 		r = SSH_ERR_INVALID_ARGUMENT;
 		break;
@@ -188,6 +190,7 @@ input_kex_gen_reply(int type, u_int32_t seq, struct ssh *ssh)
 		r = kex_ecdh_dec(kex, server_blob, &shared_secret);
 		break;
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 	case KEX_C25519_SHA256:
 		r = kex_c25519_dec(kex, server_blob, &shared_secret);
 		break;
@@ -199,6 +202,7 @@ input_kex_gen_reply(int type, u_int32_t seq, struct ssh *ssh)
 		r = kex_kem_mlkem768x25519_dec(kex, server_blob,
 		    &shared_secret);
 		break;
+#endif /* ENABLE_NONFIPS */
 	default:
 		r = SSH_ERR_INVALID_ARGUMENT;
 		break;
@@ -247,7 +251,14 @@ input_kex_gen_reply(int type, u_int32_t seq, struct ssh *ssh)
 	/* success */
 out:
 	explicit_bzero(hash, sizeof(hash));
+#ifdef ENABLE_NONFIPS
+#if defined(WITH_OPENSSL) && WITH_OPENSSL_V3
+	EVP_PKEY_free(kex->client_pkey);
+	kex->client_pkey = NULL;
+#else
 	explicit_bzero(kex->c25519_client_key, sizeof(kex->c25519_client_key));
+#endif /* defined(WITH_OPENSSL) && WITH_OPENSSL_V3 */
+#endif /* ENABLE_NONFIPS */
 	explicit_bzero(kex->sntrup761_client_key,
 	    sizeof(kex->sntrup761_client_key));
 	explicit_bzero(kex->mlkem768_client_key,
@@ -311,6 +322,7 @@ input_kex_gen_init(int type, u_int32_t seq, struct ssh *ssh)
 		    &shared_secret);
 		break;
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 	case KEX_C25519_SHA256:
 		r = kex_c25519_enc(kex, client_pubkey, &server_pubkey,
 		    &shared_secret);
@@ -323,6 +335,7 @@ input_kex_gen_init(int type, u_int32_t seq, struct ssh *ssh)
 		r = kex_kem_mlkem768x25519_enc(kex, client_pubkey,
 		    &server_pubkey, &shared_secret);
 		break;
+#endif /* ENABLE_NONFIPS */
 	default:
 		r = SSH_ERR_INVALID_ARGUMENT;
 		break;

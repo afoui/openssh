@@ -12,13 +12,13 @@ fi
 
 case "$SSH_KEYTYPES" in
 	*ssh-rsa*)	userkeytype=rsa ;;
-	*)		userkeytype=ed25519 ;;
+	*)		userkeytype=$SSH_FAST_KEY_TYPE ;;
 esac
 
 SERIAL=$$
 
 # Create a CA key and a user certificate.
-${SSHKEYGEN} -q -N '' -t ed25519  -f $OBJ/user_ca_key || \
+${SSHKEYGEN} -q -N '' -t "$SSH_FAST_KEY_TYPE"  -f $OBJ/user_ca_key || \
 	fatal "ssh-keygen of user_ca_key failed"
 ${SSHKEYGEN} -q -N '' -t ${userkeytype} -f $OBJ/cert_user_key || \
 	fatal "ssh-keygen of cert_user_key failed"

@@ -7,6 +7,8 @@ Public domain.
 
 #include "includes.h"
 
+#ifdef ENABLE_NONFIPS
+
 #include "chacha.h"
 
 typedef unsigned char u8;
@@ -216,3 +218,5 @@ chacha_encrypt_bytes(chacha_ctx *x,const u8 *m,u8 *c,u32 bytes)
     m += 64;
   }
 }
+
+#endif /* ENABLE_NONFIPS */

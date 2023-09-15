@@ -54,7 +54,9 @@ struct kexalg {
 };
 static const struct kexalg kexalgs[] = {
 #ifdef WITH_OPENSSL
+#ifdef ENABLE_NONFIPS
 	{ KEX_DH1, KEX_DH_GRP1_SHA1, 0, SSH_DIGEST_SHA1, KEX_NOT_PQ },
+#endif /* ENABLE_NONFIPS */
 	{ KEX_DH14_SHA1, KEX_DH_GRP14_SHA1, 0, SSH_DIGEST_SHA1, KEX_NOT_PQ },
 	{ KEX_DH14_SHA256, KEX_DH_GRP14_SHA256, 0, SSH_DIGEST_SHA256, KEX_NOT_PQ },
 	{ KEX_DH16_SHA512, KEX_DH_GRP16_SHA512, 0, SSH_DIGEST_SHA512, KEX_NOT_PQ },
@@ -74,6 +76,7 @@ static const struct kexalg kexalgs[] = {
 # endif /* OPENSSL_HAS_NISTP521 */
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 #if defined(HAVE_EVP_SHA256) || !defined(WITH_OPENSSL)
 	{ KEX_CURVE25519_SHA256, KEX_C25519_SHA256, 0, SSH_DIGEST_SHA256, KEX_NOT_PQ },
 	{ KEX_CURVE25519_SHA256_OLD, KEX_C25519_SHA256, 0, SSH_DIGEST_SHA256, KEX_NOT_PQ },
@@ -88,6 +91,7 @@ static const struct kexalg kexalgs[] = {
 	    SSH_DIGEST_SHA256, KEX_IS_PQ },
 #endif
 #endif /* HAVE_EVP_SHA256 || !WITH_OPENSSL */
+#endif /* ENABLE_NONFIPS */
 	{ NULL, 0, -1, -1, 0 },
 };
 

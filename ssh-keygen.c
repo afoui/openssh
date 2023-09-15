@@ -73,7 +73,11 @@
 #include "ssh-pkcs11.h"
 #endif
 
+#ifdef ENABLE_NONFIPS
 #define DEFAULT_KEY_TYPE_NAME "ed25519"
+#else
+#define DEFAULT_KEY_TYPE_NAME "ecdsa-sha2-nistp256"
+#endif
 
 /*
  * Default number of bits in the RSA and ECDSA keys.  These value can be
@@ -1176,7 +1180,9 @@ do_gen_all_hostkeys(struct passwd *pw)
 		{ "ecdsa", "ECDSA",_PATH_HOST_ECDSA_KEY_FILE },
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 		{ "ed25519", "ED25519",_PATH_HOST_ED25519_KEY_FILE },
+#endif /* ENABLE_NONFIPS */
 		{ NULL, NULL, NULL }
 	};
 

@@ -3,10 +3,10 @@
 
 tid="key revocation lists"
 
-# Use ed25519 by default since it's fast and it's supported when building
-# w/out OpenSSL.  Populate ktype[2-4] with the other types if supported.
-ktype1=ed25519; ktype2=ed25519; ktype3=ed25519;
-ktype4=ed25519; ktype5=ed25519; ktype6=ed25519;
+# Use $SSH_FAST_KEY_TYPE by default since it's fast and guaranteed to be
+# supported.  Populate ktype[2-4] with the other types if supported.
+ktype1="$SSH_FAST_KEY_TYPE"; ktype2="$SSH_FAST_KEY_TYPE"; ktype3="$SSH_FAST_KEY_TYPE";
+ktype4="$SSH_FAST_KEY_TYPE"; ktype5="$SSH_FAST_KEY_TYPE"; ktype6="$SSH_FAST_KEY_TYPE";
 for t in $SSH_KEYTYPES; do
 	case "$t" in
 		ecdsa*)		ktype2=ecdsa ;;

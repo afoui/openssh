@@ -17,6 +17,8 @@
 
 #include "includes.h"
 
+#ifdef ENABLE_NONFIPS
+
 #include <sys/types.h>
 #include <limits.h>
 
@@ -621,3 +623,5 @@ const struct sshkey_impl sshkey_ed25519_cert_impl = {
 	/* .keybits = */	256,
 	/* .funcs = */		&sshkey_ed25519_funcs,
 };
+
+#endif /* ENABLE_NONFIPS */

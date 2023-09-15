@@ -74,6 +74,25 @@ run_kex(struct ssh *client, struct ssh *server)
 	ASSERT_INT_EQ(client->kex->done, 1);
 }
 
+static const char *
+sshkey_ssh_name_hostkeyalg(struct sshkey *key)
+{
+	const char *name = sshkey_ssh_name(key);
+
+#ifndef ENABLE_NONFIPS
+	if (strcmp(name, "ssh-rsa") == 0) {
+		/*
+		 * ssh-rsa selects SHA1 for signing, which isn't FIPS-compliant.
+		 * rsa-sha2-256 is compatible with ssh-rsa keys and uses
+		 * FIPS-compliant SHA256 for signing.
+		 */
+		name = "rsa-sha2-256";
+	}
+#endif /* ENABLE_NONFIPS */
+
+	return name;
+}
+
 static void
 do_kex_with_key(char *kex, char *cipher, char *mac,
     struct sshkey *key, int keytype, int bits)
@@ -110,7 +129,7 @@ do_kex_with_key(char *kex, char *cipher, char *mac,
 		kex_params.proposal[PROPOSAL_MAC_ALGS_CTOS] = mac;
 		kex_params.proposal[PROPOSAL_MAC_ALGS_STOC] = mac;
 	}
-	keyname = strdup(sshkey_ssh_name(private));
+	keyname = strdup(sshkey_ssh_name_hostkeyalg(private));
 	ASSERT_PTR_NE(keyname, NULL);
 	kex_params.proposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = keyname;
 	ASSERT_INT_EQ(ssh_init(&client, 0, &kex_params), 0);
@@ -223,13 +242,17 @@ do_kex(char *kex)
 	do_kex_with_key(kex, NULL, NULL, NULL, KEY_ECDSA, 256);
 # endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 	do_kex_with_key(kex, NULL, NULL, NULL, KEY_ED25519, 256);
+#endif /* ENABLE_NONFIPS */
 }
 
 void
 kex_tests(void)
 {
+#ifdef ENABLE_NONFIPS
 	do_kex("curve25519-sha256");
+#endif /* ENABLE_NONFIPS */
 #ifdef WITH_OPENSSL
 #ifdef OPENSSL_HAS_ECC
 	do_kex("ecdh-sha2-nistp256");
@@ -239,17 +262,21 @@ kex_tests(void)
 	do_kex("diffie-hellman-group-exchange-sha256");
 	do_kex("diffie-hellman-group-exchange-sha1");
 	do_kex("diffie-hellman-group14-sha1");
+#ifdef ENABLE_NONFIPS
 	do_kex("diffie-hellman-group1-sha1");
+#endif /* ENABLE_NONFIPS */
 	if (test_is_benchmark()) {
 		do_kex("diffie-hellman-group14-sha256");
 		do_kex("diffie-hellman-group16-sha512");
 		do_kex("diffie-hellman-group18-sha512");
 	}
+#ifdef ENABLE_NONFIPS
 # ifdef USE_MLKEM768X25519
 	do_kex("mlkem768x25519-sha256");
 # endif /* USE_MLKEM768X25519 */
 # ifdef USE_SNTRUP761X25519
 	do_kex("sntrup761x25519-sha512");
 # endif /* USE_SNTRUP761X25519 */
+#endif /* ENABLE_NONFIPS */
 #endif /* WITH_OPENSSL */
 }

@@ -10,13 +10,13 @@ mv $OBJ/sshd_proxy $OBJ/sshd_proxy.orig
 mv $OBJ/ssh_proxy $OBJ/ssh_proxy.orig
 
 # Create a CA key
-${SSHKEYGEN} -q -N '' -t ed25519  -f $OBJ/user_ca_key ||\
+${SSHKEYGEN} -q -N '' -t "$SSH_FAST_KEY_TYPE"  -f $OBJ/user_ca_key ||\
 	fatal "ssh-keygen failed"
 
 # Make some keys and a certificate.
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key1 || \
+${SSHKEYGEN} -q -N '' -t "$SSH_FAST_KEY_TYPE" -f $OBJ/user_key1 || \
 	fatal "ssh-keygen failed"
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key2 || \
+${SSHKEYGEN} -q -N '' -t "$SSH_FAST_KEY_TYPE" -f $OBJ/user_key2 || \
 	fatal "ssh-keygen failed"
 ${SSHKEYGEN} -q -s $OBJ/user_ca_key -I "regress user key for $USER" \
 	-z $$ -n ${USER},mekmitasdigoat $OBJ/user_key1 ||
