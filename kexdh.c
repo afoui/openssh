@@ -80,7 +80,11 @@ kex_dh_compute_key(struct kex *kex, BIGNUM *dh_pub, struct sshbuf *out)
 	BN_print_fp(stderr, dh_pub);
 	fprintf(stderr, "\n");
 	debug("bits %d", BN_num_bits(dh_pub));
+#if WITH_OPENSSL_V3
+	EVP_PKEY_print_params_fp(stderr, kex->dh->params, 8, NULL);
+#else
 	DHparams_print_fp(stderr, kex->dh);
+#endif
 	fprintf(stderr, "\n");
 #endif
 
@@ -111,7 +115,11 @@ kex_dh_keypair(struct kex *kex)
 	    (r = sshbuf_get_u32(buf, NULL)) != 0)
 		goto out;
 #ifdef DEBUG_KEXDH
+#if WITH_OPENSSL_V3
+	EVP_PKEY_print_params_fp(stderr, kex->dh->params, 8, NULL);
+#else
 	DHparams_print_fp(stderr, kex->dh);
+#endif
 	fprintf(stderr, "pub= ");
 	BN_print_fp(stderr, pub_key);
 	fprintf(stderr, "\n");

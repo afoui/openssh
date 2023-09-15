@@ -10,11 +10,19 @@ cp $OBJ/ssh_proxy $OBJ/ssh_proxy_bak
 PLAIN_TYPES=`$SSH -Q key-plain | maybe_filter_sk | sed 's/^ssh-dss/ssh-dsa/;s/^ssh-//'`
 EXTRA_TYPES=""
 rsa=""
+kname_extra=""
 
 if echo "$PLAIN_TYPES" | grep '^rsa$' >/dev/null 2>&1 ; then
 	rsa=rsa
 	PLAIN_TYPES="$PLAIN_TYPES rsa-sha2-256 rsa-sha2-512"
+	kname_extra="${kname_extra},rsa-sha2-*"
 fi
+
+case $SSH_FAST_KEY_TYPE in
+	ed25519) kname_extra="${kname_extra},ssh-ed25519*" ;;
+	ecdsa-sha2-nistp256) kname_extra="${kname_extra},ecdsa-sha2-nistp256*" ;;
+	*) fail "unsupported key type $SSH_FAST_KEY_TYPE" ;;
+esac
 
 kname() {
 	case $1 in
@@ -24,18 +32,14 @@ kname() {
 	# subshell because some seds will add a newline
 	*) n=$(echo $1 | sed 's/^dsa/ssh-dss/;s/^rsa/ssh-rsa/;s/^ed/ssh-ed/') ;;
 	esac
-	if [ -z "$rsa" ]; then
-		echo "$n*,ssh-ed25519*"
-	else
-		echo "$n*,ssh-rsa*,ssh-ed25519*"
-	fi
+	echo "$n*${kname_extra}"
 }
 
 # Create a CA key
 if [ ! -z "$rsa" ]; then
 	catype=rsa
 else
-	catype=ed25519
+	catype="$SSH_FAST_KEY_TYPE"
 fi
 ${SSHKEYGEN} -q -N '' -t $catype  -f $OBJ/user_ca_key ||\
 	fail "ssh-keygen of user_ca_key failed"
@@ -288,7 +292,7 @@ test_one() {
 	fi
 
 	for auth in $auth_choice ; do
-		for ktype in $rsa ed25519 ; do
+		for ktype in $rsa $SSH_FAST_KEY_TYPE; do
 			cat $OBJ/sshd_proxy_bak > $OBJ/sshd_proxy
 			if test "x$auth" = "xauthorized_keys" ; then
 				# Add CA to authorized_keys

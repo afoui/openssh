@@ -7,21 +7,21 @@ rm -f $OBJ/user_ca_key* $OBJ/user_key*
 rm -f $OBJ/cert_user_key*
 
 # Create a CA key
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_ca_key1 ||\
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE -f $OBJ/user_ca_key1 ||\
 	fatal "ssh-keygen failed"
-${SSHKEYGEN} -q -N '' -t ed25519  -f $OBJ/user_ca_key2 ||\
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE  -f $OBJ/user_ca_key2 ||\
 	fatal "ssh-keygen failed"
 
 # Make some keys and certificates.
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key1 || \
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE -f $OBJ/user_key1 || \
 	fatal "ssh-keygen failed"
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key2 || \
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE -f $OBJ/user_key2 || \
 	fatal "ssh-keygen failed"
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key3 || \
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE -f $OBJ/user_key3 || \
 	fatal "ssh-keygen failed"
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key4 || \
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE -f $OBJ/user_key4 || \
 	fatal "ssh-keygen failed"
-${SSHKEYGEN} -q -N '' -t ed25519 -f $OBJ/user_key5 || \
+${SSHKEYGEN} -q -N '' -t $SSH_FAST_KEY_TYPE -f $OBJ/user_key5 || \
 	fatal "ssh-keygen failed"
 
 # Move the certificate to a different address to better control

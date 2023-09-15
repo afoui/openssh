@@ -101,10 +101,12 @@ static int sshkey_from_blob_internal(struct sshbuf *buf,
     struct sshkey **keyp, int allow_cert);
 
 /* Supported key types */
+#ifdef ENABLE_NONFIPS
 extern const struct sshkey_impl sshkey_ed25519_impl;
 extern const struct sshkey_impl sshkey_ed25519_cert_impl;
 extern const struct sshkey_impl sshkey_ed25519_sk_impl;
 extern const struct sshkey_impl sshkey_ed25519_sk_cert_impl;
+#endif /* ENABLE_NONFIPS */
 #ifdef WITH_OPENSSL
 # ifdef OPENSSL_HAS_ECC
 #  ifdef ENABLE_SK
@@ -122,13 +124,17 @@ extern const struct sshkey_impl sshkey_ecdsa_nistp521_cert_impl;
 #  endif /* OPENSSL_HAS_NISTP521 */
 # endif /* OPENSSL_HAS_ECC */
 extern const struct sshkey_impl sshkey_rsa_impl;
+#ifdef ENABLE_NONFIPS
 extern const struct sshkey_impl sshkey_rsa_cert_impl;
+#endif /* ENABLE_NONFIPS */
 extern const struct sshkey_impl sshkey_rsa_sha256_impl;
 extern const struct sshkey_impl sshkey_rsa_sha256_cert_impl;
 extern const struct sshkey_impl sshkey_rsa_sha512_impl;
 extern const struct sshkey_impl sshkey_rsa_sha512_cert_impl;
+# ifdef ENABLE_NONFIPS
 extern const struct sshkey_impl sshkey_dss_impl;
 extern const struct sshkey_impl sshkey_dsa_cert_impl;
+# endif /* ENABLE_NONFIPS */
 #endif /* WITH_OPENSSL */
 #ifdef WITH_XMSS
 extern const struct sshkey_impl sshkey_xmss_impl;
@@ -136,12 +142,14 @@ extern const struct sshkey_impl sshkey_xmss_cert_impl;
 #endif
 
 const struct sshkey_impl * const keyimpls[] = {
+#ifdef ENABLE_NONFIPS
 	&sshkey_ed25519_impl,
 	&sshkey_ed25519_cert_impl,
 #ifdef ENABLE_SK
 	&sshkey_ed25519_sk_impl,
 	&sshkey_ed25519_sk_cert_impl,
-#endif
+#endif /* ENABLE_SK */
+#endif /* ENABLE_NONFIPS */
 #ifdef WITH_OPENSSL
 # ifdef OPENSSL_HAS_ECC
 	&sshkey_ecdsa_nistp256_impl,
@@ -158,10 +166,20 @@ const struct sshkey_impl * const keyimpls[] = {
 	&sshkey_ecdsa_sk_webauthn_impl,
 #  endif /* ENABLE_SK */
 # endif /* OPENSSL_HAS_ECC */
+# ifdef ENABLE_NONFIPS
 	&sshkey_dss_impl,
 	&sshkey_dsa_cert_impl,
+# endif /* ENABLE_NONFIPS */
 	&sshkey_rsa_impl,
+# ifdef ENABLE_NONFIPS
+	/*
+	Usually associated with SHA1, which is not FIPS-approved for signing.
+	Sometimes a SHA2 (FIPS-approved) signature is tolerated despite the
+	ssh-rsa-cert-v01@openssh.com type. Provided we ensure this condition
+	is met, sshkey_rsa_cert_impl could be enabled.
+	*/
 	&sshkey_rsa_cert_impl,
+# endif /* ENABLE_NONFIPS */
 	&sshkey_rsa_sha256_impl,
 	&sshkey_rsa_sha256_cert_impl,
 	&sshkey_rsa_sha512_impl,

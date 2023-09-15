@@ -10,17 +10,63 @@ if [ -z "$SUDO" -a ! -w /var/run ]; then
 	skip "need SUDO to create file in /var/run, test won't work without"
 fi
 
-case "$SSH_KEYTYPES" in
-	*ssh-rsa*)	userkeytype=rsa ;;
-	*)		userkeytype=ed25519 ;;
+SSH_CERTTYPES=`ssh -Q key-sig | grep 'cert-v01@openssh.com'`
+
+have_key () {
+	for t in $SSH_KEYTYPES ; do
+		if [ "$t" = "$1" ] ; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+have_cert () {
+	for t in $SSH_CERTTYPES ; do
+		if [ "$t" = "$1" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# CA key type
+cakeytype="$SSH_FAST_KEY_TYPE"
+case "$cakeytype" in
+	ed25519)
+		cakeytypename=ssh-ed25519
+		;;
+	ecdsa-sha2-nistp*)
+		cakeytypename="$cakeytype"
+		;;
+	*) fail "unsupported key type $cakeytype" ;;
 esac
+
+
+# User cert type
+if have_key ssh-rsa && have_cert ssh-rsa-cert-v01@openssh.com ; then
+	userkeytype=rsa
+else
+	userkeytype="$SSH_FAST_KEY_TYPE"
+fi
+
+case "$userkeytype" in
+	rsa) usercerttype="ssh-rsa-cert-v01@openssh.com" ;;
+	ed25519) usercerttype="ssh-ed25519-cert-v01@openssh.com" ;;
+	ecdsa-sha2-nistp*) usercerttype="${userkeytype}-cert-v01@openssh.com" ;;
+	*) fail "unsupported key type $userkeytype" ;;
+esac
+
+if ! have_cert "$usercerttype" ; then
+	fail "unsupported cert type $usercerttype"
+fi
 
 SERIAL=$$
 
 # Create a CA key and a user certificate.
-${SSHKEYGEN} -q -N '' -t ed25519  -f $OBJ/user_ca_key || \
+${SSHKEYGEN} -q -N '' -t "$cakeytype"  -f $OBJ/user_ca_key || \
 	fatal "ssh-keygen of user_ca_key failed"
-${SSHKEYGEN} -q -N '' -t ${userkeytype} -f $OBJ/cert_user_key || \
+${SSHKEYGEN} -q -N '' -t "$userkeytype" -f $OBJ/cert_user_key || \
 	fatal "ssh-keygen of cert_user_key failed"
 ${SSHKEYGEN} -q -s $OBJ/user_ca_key -I "Joanne User" \
     -z $$ -n ${USER},mekmitasdigoat $OBJ/cert_user_key || \
@@ -38,8 +84,8 @@ trap "$SUDO rm -f ${PRINCIPALS_COMMAND}" 0
 cat << _EOF | $SUDO sh -c "cat > '$PRINCIPALS_COMMAND'"
 #!/bin/sh
 test "x\$1" != "x${LOGNAME}" && exit 1
-test "x\$2" != "xssh-${userkeytype}-cert-v01@openssh.com" && exit 1
-test "x\$3" != "xssh-ed25519" && exit 1
+test "x\$2" != "x${usercerttype}" && exit 1
+test "x\$3" != "x${cakeytypename}" && exit 1
 test "x\$4" != "xJoanne User" && exit 1
 test "x\$5" != "x${SERIAL}" && exit 1
 test "x\$6" != "x${CA_FP}" && exit 1

@@ -26,6 +26,7 @@
 #ifndef SSHKEY_H
 #define SSHKEY_H
 
+#include "config.h"
 #include <stdint.h>
 #include <sys/types.h>
 

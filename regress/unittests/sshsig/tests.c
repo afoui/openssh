@@ -103,9 +103,11 @@ tests(void)
 	check_sig("rsa.pub", "rsa.sig", msg, namespace);
 	TEST_DONE();
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("check DSA signature");
 	check_sig("dsa.pub", "dsa.sig", msg, namespace);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("check ECDSA signature");
@@ -114,9 +116,11 @@ tests(void)
 #endif
 #endif
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("check ED25519 signature");
 	check_sig("ed25519.pub", "ed25519.sig", msg, namespace);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 #ifdef ENABLE_SK
 #if defined(WITH_OPENSSL) && defined(OPENSSL_HAS_ECC)
@@ -125,9 +129,11 @@ tests(void)
 	TEST_DONE();
 #endif
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("check ED25519-SK signature");
 	check_sig("ed25519_sk.pub", "ed25519_sk.sig", msg, namespace);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 #if defined(WITH_OPENSSL) && defined(OPENSSL_HAS_ECC)
 	TEST_START("check ECDSA-SK webauthn signature");

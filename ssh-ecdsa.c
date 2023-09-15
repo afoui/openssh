@@ -256,7 +256,6 @@ ssh_ecdsa_deserialize(const char *ktype, struct sshbuf *b,
 	return r;
 }
 
-
 static int
 ssh_ecdsa_deserialize_public(const char *ktype, struct sshbuf *b,
     struct sshkey *key)

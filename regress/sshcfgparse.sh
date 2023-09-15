@@ -4,11 +4,19 @@
 tid="ssh config parse"
 
 dsa=0
+ed25519=0
+rsa=0
 for t in $SSH_KEYTYPES; do
 	case "$t" in
 		ssh-dss)	dsa=1 ;;
+		ssh-ed25519)	ed25519=1 ;;
+		ssh-rsa)	rsa=1 ;;
 	esac
 done
+
+if [ "$ed25519" = 0 -a "$rsa" = 0 ]; then
+	fatal "at least one of ed25519 or rsa must be enabled"
+fi
 
 expect_result_present() {
 	_str="$1" ; shift
@@ -65,22 +73,37 @@ test "$f" = "baz" || fail "user first match user@host, expected 'baz' got '$f'"
 verbose "pubkeyacceptedalgorithms"
 # Default set
 f=`${SSH} -GF none host | awk '/^pubkeyacceptedalgorithms /{print $2}'`
-expect_result_present "$f" "ssh-ed25519" "ssh-ed25519-cert-v01.*"
+if [ "$ed25519" = "1" ]; then
+	expect_result_present "$f" "ssh-ed25519" "ssh-ed25519-cert-v01.*"
+fi
+if [ "$rsa" = "1" ]; then
+	expect_result_present "$f" "rsa-sha2-256" "rsa-sha2-256-cert-v01.*"
+fi
 expect_result_absent "$f" "ssh-dss"
 # Explicit override
-f=`${SSH} -GF none -opubkeyacceptedalgorithms=ssh-ed25519 host | \
-    awk '/^pubkeyacceptedalgorithms /{print $2}'`
-expect_result_present "$f" "ssh-ed25519"
-expect_result_absent "$f" "ssh-ed25519-cert-v01.*" "ssh-dss"
+if [ "$ed25519" = "1" ]; then
+	f=`${SSH} -GF none -opubkeyacceptedalgorithms=ssh-ed25519 host | \
+	    awk '/^pubkeyacceptedalgorithms /{print $2}'`
+	expect_result_present "$f" "ssh-ed25519"
+	expect_result_absent "$f" "ssh-ed25519-cert-v01.*" "ssh-dss"
+fi
+if [ "$rsa" = "1" ]; then
+	f=`${SSH} -GF none -opubkeyacceptedalgorithms=rsa-sha2-256 host | \
+	    awk '/^pubkeyacceptedalgorithms /{print $2}'`
+	expect_result_present "$f" "rsa-sha2-256"
+	expect_result_absent "$f" "rsa-sha2-256-cert-v01.*" "ssh-dss"
+fi
 # Removal from default set
-f=`${SSH} -GF none -opubkeyacceptedalgorithms=-ssh-ed25519-cert* host | \
-    awk '/^pubkeyacceptedalgorithms /{print $2}'`
-expect_result_present "$f" "ssh-ed25519"
-expect_result_absent "$f" "ssh-ed25519-cert-v01.*" "ssh-dss"
-f=`${SSH} -GF none -opubkeyacceptedalgorithms=-ssh-ed25519 host | \
-    awk '/^pubkeyacceptedalgorithms /{print $2}'`
-expect_result_present "$f" "ssh-ed25519-cert-v01.*"
-expect_result_absent "$f" "ssh-ed25519" "ssh-dss"
+if [ "$ed25519" = "1" ]; then
+	f=`${SSH} -GF none -opubkeyacceptedalgorithms=-ssh-ed25519-cert* host | \
+	    awk '/^pubkeyacceptedalgorithms /{print $2}'`
+	expect_result_present "$f" "ssh-ed25519"
+	expect_result_absent "$f" "ssh-ed25519-cert-v01.*" "ssh-dss"
+	f=`${SSH} -GF none -opubkeyacceptedalgorithms=-ssh-ed25519 host | \
+	    awk '/^pubkeyacceptedalgorithms /{print $2}'`
+	expect_result_present "$f" "ssh-ed25519-cert-v01.*"
+	expect_result_absent "$f" "ssh-ed25519" "ssh-dss"
+fi
 # Append to default set.
 # This is not tested when built !WITH_OPENSSL
 if [ "$dsa" = "1" ]; then

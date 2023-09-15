@@ -36,21 +36,29 @@ int	crypto_hash_sha512(unsigned char *, const unsigned char *,
 #define crypto_sign_ed25519_PUBLICKEYBYTES 32U
 #define crypto_sign_ed25519_BYTES 64U
 
+#ifdef ENABLE_NONFIPS
+
 int	crypto_sign_ed25519(unsigned char *, unsigned long long *,
     const unsigned char *, unsigned long long, const unsigned char *);
 int	crypto_sign_ed25519_open(unsigned char *, unsigned long long *,
     const unsigned char *, unsigned long long, const unsigned char *);
 int	crypto_sign_ed25519_keypair(unsigned char *, unsigned char *);
 
+#endif /* ENABLE_NONFIPS */
+
 #define crypto_kem_sntrup761_PUBLICKEYBYTES 1158
 #define crypto_kem_sntrup761_SECRETKEYBYTES 1763
 #define crypto_kem_sntrup761_CIPHERTEXTBYTES 1039
 #define crypto_kem_sntrup761_BYTES 32
+
+#ifdef ENABLE_NONFIPS
 
 int	crypto_kem_sntrup761_enc(unsigned char *cstr, unsigned char *k,
     const unsigned char *pk);
 int	crypto_kem_sntrup761_dec(unsigned char *k,
     const unsigned char *cstr, const unsigned char *sk);
 int	crypto_kem_sntrup761_keypair(unsigned char *pk, unsigned char *sk);
+
+#endif /* ENABLE_NONFIPS */
 
 #endif /* crypto_api_h */

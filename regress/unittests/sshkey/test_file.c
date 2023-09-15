@@ -59,6 +59,7 @@ sshkey_file_tests(void)
 
 
 #ifdef WITH_OPENSSL
+#ifdef ENABLE_NONFIPS /* rsa_1 key too small */
 	TEST_START("parse RSA from private");
 	buf = load_file("rsa_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -84,6 +85,7 @@ sshkey_file_tests(void)
 	BN_free(k1_q);
 	TEST_DONE();
 
+#ifdef ENABLE_NONFIPS /* MD5 involved */
 	TEST_START("parse RSA from private w/ passphrase");
 	buf = load_file("rsa_1_pw");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf,
@@ -93,6 +95,7 @@ sshkey_file_tests(void)
 	ASSERT_INT_EQ(sshkey_equal(k1, k2), 1);
 	sshkey_free(k2);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 	TEST_START("parse RSA from new-format");
 	buf = load_file("rsa_n");
@@ -177,6 +180,7 @@ sshkey_file_tests(void)
 
 	sshkey_free(k1);
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("parse DSA from private");
 	buf = load_file("dsa_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -273,6 +277,7 @@ sshkey_file_tests(void)
 	TEST_DONE();
 
 	sshkey_free(k1);
+#endif /* ENABLE_NONFIPS */
 
 #ifdef OPENSSL_HAS_ECC
 	TEST_START("parse ECDSA from private");
@@ -312,6 +317,7 @@ sshkey_file_tests(void)
 #endif /* WITH_OPENSSL_V3 */
 	TEST_DONE();
 
+#ifdef ENABLE_NONFIPS /* MD5 involved */
 	TEST_START("parse ECDSA from private w/ passphrase");
 	buf = load_file("ecdsa_1_pw");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf,
@@ -321,6 +327,7 @@ sshkey_file_tests(void)
 	ASSERT_INT_EQ(sshkey_equal(k1, k2), 1);
 	sshkey_free(k2);
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 
 	TEST_START("parse ECDSA from new-format");
 	buf = load_file("ecdsa_n");
@@ -387,8 +394,10 @@ sshkey_file_tests(void)
 
 	sshkey_free(k1);
 #endif /* OPENSSL_HAS_ECC */
+#endif /* ENABLE_NONFIPS */
 #endif /* WITH_OPENSSL */
 
+#ifdef ENABLE_NONFIPS
 	TEST_START("parse Ed25519 from private");
 	buf = load_file("ed25519_1");
 	ASSERT_INT_EQ(sshkey_parse_private_fileblob(buf, "", &k1, NULL), 0);
@@ -586,6 +595,7 @@ sshkey_file_tests(void)
 
 	sshkey_free(k1);
 #endif /* ENABLE_SK */
+#endif /* ENABLE_NONFIPS */
 
 	sshbuf_free(pw);
 

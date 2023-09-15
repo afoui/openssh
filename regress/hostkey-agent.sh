@@ -15,7 +15,7 @@ echo "HostKeyAgent $SSH_AUTH_SOCK" >> $OBJ/sshd_proxy.orig
 
 trace "make CA key"
 
-${SSHKEYGEN} -qt ed25519 -f $OBJ/agent-ca -N '' || fatal "ssh-keygen CA"
+${SSHKEYGEN} -qt "$SSH_FAST_KEY_TYPE" -f $OBJ/agent-ca -N '' || fatal "ssh-keygen CA"
 
 trace "load hostkeys"
 for k in $SSH_KEYTYPES ; do
@@ -34,10 +34,16 @@ unset SSH_AUTH_SOCK
 
 for k in $SSH_KEYTYPES ; do
 	verbose "key type $k"
+
+	case "$k" in
+		ssh-rsa) hka='rsa-sha2-*';;
+		*) hka="$k";;
+	esac
+
 	cp $OBJ/sshd_proxy.orig $OBJ/sshd_proxy
-	echo "HostKeyAlgorithms $k" >> $OBJ/sshd_proxy
+	echo "HostKeyAlgorithms $hka" >> $OBJ/sshd_proxy
 	echo "Hostkey $OBJ/agent-key.${k}" >> $OBJ/sshd_proxy
-	opts="-oHostKeyAlgorithms=$k -F $OBJ/ssh_proxy"
+	opts="-oHostKeyAlgorithms=$hka -F $OBJ/ssh_proxy"
 	( printf 'localhost-with-alias,127.0.0.1,::1 ' ;
 	  cat $OBJ/agent-key.$k.pub) > $OBJ/known_hosts
 	SSH_CONNECTION=`${SSH} $opts host 'echo $SSH_CONNECTION'`
@@ -72,7 +78,13 @@ echo "HostKeyAlgorithms $HOSTKEYALGS" >> $OBJ/sshd_proxy
 
 for k in $SSH_CERTTYPES ; do
 	verbose "cert type $k"
-	opts="-oHostKeyAlgorithms=$k -F $OBJ/ssh_proxy"
+
+	case "$k" in
+		ssh-rsa-cert-v01@openssh.com) hka='rsa-sha2-*-cert-v01@openssh.com';;
+		*) hka="$k";;
+	esac
+
+	opts="-oHostKeyAlgorithms=$hka -F $OBJ/ssh_proxy"
 	SSH_CONNECTION=`${SSH} $opts host 'echo $SSH_CONNECTION'`
 	if [ $? -ne 0 ]; then
 		fail "cert type $k failed"

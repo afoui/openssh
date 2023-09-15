@@ -38,6 +38,8 @@
 
 #include "includes.h"
 
+#ifdef ENABLE_NONFIPS
+
 #if !defined(HAVE_SHA256UPDATE) || !defined(HAVE_SHA384UPDATE) || \
     !defined(HAVE_SHA512UPDATE)
 
@@ -1008,3 +1010,5 @@ DEF_WEAK(SHA512_256Final);
 #endif /* 0 */
 
 #endif /* HAVE_SHA{256,384,512}UPDATE */
+
+#endif /* ENABLE_NONFIPS */

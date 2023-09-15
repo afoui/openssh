@@ -406,6 +406,7 @@ pack_key_ed25519(struct sk_enroll_response *response)
 	/* success */
 	ret = 0;
  out:
+	EVP_PKEY_free(pkey);
 	if (ret != 0)
 		free(response->public_key);
 	return ret;

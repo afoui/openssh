@@ -90,7 +90,9 @@ struct kexalg {
 };
 static const struct kexalg kexalgs[] = {
 #ifdef WITH_OPENSSL
+#ifdef ENABLE_NONFIPS
 	{ KEX_DH1, KEX_DH_GRP1_SHA1, 0, SSH_DIGEST_SHA1 },
+#endif /* ENABLE_NONFIPS */
 	{ KEX_DH14_SHA1, KEX_DH_GRP14_SHA1, 0, SSH_DIGEST_SHA1 },
 	{ KEX_DH14_SHA256, KEX_DH_GRP14_SHA256, 0, SSH_DIGEST_SHA256 },
 	{ KEX_DH16_SHA512, KEX_DH_GRP16_SHA512, 0, SSH_DIGEST_SHA512 },
@@ -110,6 +112,7 @@ static const struct kexalg kexalgs[] = {
 # endif /* OPENSSL_HAS_NISTP521 */
 #endif /* OPENSSL_HAS_ECC */
 #endif /* WITH_OPENSSL */
+#ifdef ENABLE_NONFIPS
 #if defined(HAVE_EVP_SHA256) || !defined(WITH_OPENSSL)
 	{ KEX_CURVE25519_SHA256, KEX_C25519_SHA256, 0, SSH_DIGEST_SHA256 },
 	{ KEX_CURVE25519_SHA256_OLD, KEX_C25519_SHA256, 0, SSH_DIGEST_SHA256 },
@@ -118,6 +121,7 @@ static const struct kexalg kexalgs[] = {
 	    SSH_DIGEST_SHA512 },
 #endif
 #endif /* HAVE_EVP_SHA256 || !WITH_OPENSSL */
+#endif /* ENABLE_NONFIPS */
 	{ NULL, 0, -1, -1},
 };
 
@@ -546,10 +550,28 @@ static int
 kex_compose_ext_info_server(struct ssh *ssh, struct sshbuf *m)
 {
 	int r;
+	char *algs = NULL;
+	char *newalgs = NULL;
 
-	if (ssh->kex->server_sig_algs == NULL &&
-	    (ssh->kex->server_sig_algs = sshkey_alg_list(0, 1, 1, ',')) == NULL)
-		return SSH_ERR_ALLOC_FAIL;
+	if (ssh->kex->server_sig_algs == NULL) {
+		if ((algs = sshkey_alg_list(0, 1, 1, ',')) == NULL) {
+			r = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+#ifdef ENABLE_NONFIPS
+		newalgs = algs;
+		algs = NULL;
+#else
+		/* ssh-rsa uses SHA1, which is not FIPS-compliant */
+		if ((newalgs = match_filter_denylist(algs, "ssh-rsa")) == NULL) {
+			r = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+#endif /* ENABLE_NONFIPS */
+		ssh->kex->server_sig_algs = newalgs;
+		newalgs = NULL;
+	}
+
 	if ((r = sshbuf_put_u32(m, 3)) != 0 ||
 	    (r = sshbuf_put_cstring(m, "server-sig-algs")) != 0 ||
 	    (r = sshbuf_put_cstring(m, ssh->kex->server_sig_algs)) != 0 ||
@@ -559,9 +581,14 @@ kex_compose_ext_info_server(struct ssh *ssh, struct sshbuf *m)
 	    (r = sshbuf_put_cstring(m, "ping@openssh.com")) != 0 ||
 	    (r = sshbuf_put_cstring(m, "0")) != 0) {
 		error_fr(r, "compose");
-		return r;
+		goto out;
 	}
-	return 0;
+	/* success */
+	r = 0;
+ out:
+	free(algs);
+	free(newalgs);
+	return r;
 }
 
 static int

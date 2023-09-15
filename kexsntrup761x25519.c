@@ -32,6 +32,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#if WITH_OPENSSL_V3
+#include <openssl/core_names.h>
+#endif
 
 #include "sshkey.h"
 #include "kex.h"
@@ -42,6 +45,38 @@
 int
 kex_kem_sntrup761x25519_keypair(struct kex *kex)
 {
+#if defined(WITH_OPENSSL) && WITH_OPENSSL_V3
+	struct sshbuf *buf = NULL;
+	u_char *cp = NULL;
+	EVP_PKEY *pkey = NULL;
+	size_t need;
+	int r;
+
+	if ((buf = sshbuf_new()) == NULL)
+		return SSH_ERR_ALLOC_FAIL;
+	need = crypto_kem_sntrup761_PUBLICKEYBYTES + CURVE25519_SIZE;
+	if ((r = sshbuf_reserve(buf, need, &cp)) != 0)
+		goto out;
+	crypto_kem_sntrup761_keypair(cp, kex->sntrup761_client_key);
+#ifdef DEBUG_KEXECDH
+	dump_digest("client public key sntrup761:", cp,
+	    crypto_kem_sntrup761_PUBLICKEYBYTES);
+#endif
+	cp += crypto_kem_sntrup761_PUBLICKEYBYTES;
+	if ((r = kexc25519_keygen(&pkey, cp)) != 0)
+		goto out;
+#ifdef DEBUG_KEXECDH
+	dump_digest("client public key c25519:", cp, CURVE25519_SIZE);
+#endif
+	kex->client_pkey = pkey;
+	pkey = NULL;
+	kex->client_pub = buf;
+	buf = NULL;
+ out:
+	EVP_PKEY_free(pkey);
+	sshbuf_free(buf);
+	return r;
+#else
 	struct sshbuf *buf = NULL;
 	u_char *cp = NULL;
 	size_t need;
@@ -67,6 +102,7 @@ kex_kem_sntrup761x25519_keypair(struct kex *kex)
  out:
 	sshbuf_free(buf);
 	return r;
+#endif /* defined(WITH_OPENSSL) && WITH_OPENSSL_V3 */
 }
 
 int
@@ -78,7 +114,11 @@ kex_kem_sntrup761x25519_enc(struct kex *kex,
 	struct sshbuf *buf = NULL;
 	const u_char *client_pub;
 	u_char *kem_key, *ciphertext, *server_pub;
+#if WITH_OPENSSL_V3
+	EVP_PKEY *server_pkey = NULL;
+#else
 	u_char server_key[CURVE25519_SIZE];
+#endif
 	u_char hash[SSH_DIGEST_MAX_LENGTH];
 	size_t need;
 	int r;
@@ -121,11 +161,21 @@ kex_kem_sntrup761x25519_enc(struct kex *kex,
 	crypto_kem_sntrup761_enc(ciphertext, kem_key, client_pub);
 	/* generate ECDH key pair, store server pubkey after ciphertext */
 	server_pub = ciphertext + crypto_kem_sntrup761_CIPHERTEXTBYTES;
+#if WITH_OPENSSL_V3
+	if ((r = kexc25519_keygen(&server_pkey, server_pub)) != 0)
+		goto out;
+#else
 	kexc25519_keygen(server_key, server_pub);
+#endif /* WITH_OPENSSL_V3 */
 	/* append ECDH shared key */
 	client_pub += crypto_kem_sntrup761_PUBLICKEYBYTES;
+#if WITH_OPENSSL_V3
+	if ((r = kexc25519_shared_key_ext(server_pkey, client_pub, buf, 1)) < 0)
+		goto out;
+#else
 	if ((r = kexc25519_shared_key_ext(server_key, client_pub, buf, 1)) < 0)
 		goto out;
+#endif
 	if ((r = ssh_digest_buffer(kex->hash_alg, buf, hash, sizeof(hash))) != 0)
 		goto out;
 #ifdef DEBUG_KEXECDH
@@ -150,7 +200,11 @@ kex_kem_sntrup761x25519_enc(struct kex *kex,
 	buf = NULL;
  out:
 	explicit_bzero(hash, sizeof(hash));
+#if WITH_OPENSSL_V3
+	EVP_PKEY_free(server_pkey);
+#else
 	explicit_bzero(server_key, sizeof(server_key));
+#endif /* WITH_OPENSSL_V3 */
 	sshbuf_free(server_blob);
 	sshbuf_free(buf);
 	return r;
@@ -191,9 +245,15 @@ kex_kem_sntrup761x25519_dec(struct kex *kex,
 		goto out;
 	decoded = crypto_kem_sntrup761_dec(kem_key, ciphertext,
 	    kex->sntrup761_client_key);
+#if WITH_OPENSSL_V3
+	if ((r = kexc25519_shared_key_ext(kex->client_pkey, server_pub,
+	    buf, 1)) < 0)
+		goto out;
+#else
 	if ((r = kexc25519_shared_key_ext(kex->c25519_client_key, server_pub,
 	    buf, 1)) < 0)
 		goto out;
+#endif
 	if ((r = ssh_digest_buffer(kex->hash_alg, buf, hash, sizeof(hash))) != 0)
 		goto out;
 #ifdef DEBUG_KEXECDH

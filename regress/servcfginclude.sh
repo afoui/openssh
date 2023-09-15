@@ -2,8 +2,14 @@
 
 tid="server config include"
 
+case "$SSH_FAST_KEY_TYPE" in
+	ed25519) host_key="$OBJ/host.ssh-ed25519" ;;
+	ecdsa-sha2-nistp*) host_key="$OBJ/host.$SSH_FAST_KEY_TYPE" ;;
+	*) fail "unsupported key type $SSH_FAST_KEY_TYPE" ;;
+esac
+
 cat > $OBJ/sshd_config.i << _EOF
-HostKey $OBJ/host.ssh-ed25519
+HostKey $host_key
 Match host a
 	Banner /aa
 
@@ -126,7 +132,7 @@ rm -f $OBJ/sshd_config.i.*
 
 # Ensure that a missing include is not fatal.
 cat > $OBJ/sshd_config.i << _EOF
-HostKey $OBJ/host.ssh-ed25519
+HostKey $host_key
 Include $OBJ/sshd_config.i.*
 Banner /aa
 _EOF
@@ -153,7 +159,7 @@ ${SUDO} ${REAL_SSHD} -f $OBJ/sshd_config.i.x -T \
 # Ensure the Include before any Match block works as expected (bug #3122)
 cat > $OBJ/sshd_config.i << _EOF
 Banner /xx
-HostKey $OBJ/host.ssh-ed25519
+HostKey $host_key
 Include $OBJ/sshd_config.i.2
 Match host a
 	Banner /aaaa
@@ -172,7 +178,7 @@ Include $OBJ/sshd_config.i.2
 Port 7722
 _EOF
 cat > $OBJ/sshd_config.i.2 << _EOF
-HostKey $OBJ/host.ssh-ed25519
+HostKey $host_key
 _EOF
 
 trace "Port after included files"

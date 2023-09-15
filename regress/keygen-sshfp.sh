@@ -4,35 +4,37 @@
 tid="keygen-sshfp"
 
 trace "keygen fingerprints"
-fp=`${SSHKEYGEN} -r test -f ${SRC}/ed25519_openssh.pub | \
-    awk '$5=="1"{print $6}'`
-if [ "$fp" != "8a8647a7567e202ce317e62606c799c53d4c121f" ]; then
-	fail "keygen fingerprint sha1"
-fi
-fp=`${SSHKEYGEN} -r test -f ${SRC}/ed25519_openssh.pub | \
-    awk '$5=="2"{print $6}'`
-if [ "$fp" != \
-    "54a506fb849aafb9f229cf78a94436c281efcb4ae67c8a430e8c06afcb5ee18f" ]; then
-	fail "keygen fingerprint sha256"
-fi
+if ${SSH} -Q key-plain | grep ed25519 >/dev/null; then
+	fp=`${SSHKEYGEN} -r test -f ${SRC}/ed25519_openssh.pub | \
+		awk '$5=="1"{print $6}'`
+	if [ "$fp" != "8a8647a7567e202ce317e62606c799c53d4c121f" ]; then
+		fail "keygen fingerprint sha1"
+	fi
+	fp=`${SSHKEYGEN} -r test -f ${SRC}/ed25519_openssh.pub | \
+		awk '$5=="2"{print $6}'`
+	if [ "$fp" != \
+		"54a506fb849aafb9f229cf78a94436c281efcb4ae67c8a430e8c06afcb5ee18f" ]; then
+		fail "keygen fingerprint sha256"
+	fi
 
-# Expect two lines of output without an explicit algorithm
-fp=`${SSHKEYGEN} -r test -f ${SRC}/ed25519_openssh.pub | wc -l`
-if [ $(($fp + 0)) -ne 2 ] ; then
-	fail "incorrect number of SSHFP records $fp (expected 2)"
-fi
+	# Expect two lines of output without an explicit algorithm
+	fp=`${SSHKEYGEN} -r test -f ${SRC}/ed25519_openssh.pub | wc -l`
+	if [ $(($fp + 0)) -ne 2 ] ; then
+		fail "incorrect number of SSHFP records $fp (expected 2)"
+	fi
 
-# Test explicit algorithm selection
-exp="test IN SSHFP 4 1 8a8647a7567e202ce317e62606c799c53d4c121f"
-fp=`${SSHKEYGEN} -Ohashalg=sha1 -r test -f ${SRC}/ed25519_openssh.pub`
-if [ "x$exp" != "x$fp" ] ; then
-	fail "incorrect SHA1 SSHFP output"
-fi
+	# Test explicit algorithm selection
+	exp="test IN SSHFP 4 1 8a8647a7567e202ce317e62606c799c53d4c121f"
+	fp=`${SSHKEYGEN} -Ohashalg=sha1 -r test -f ${SRC}/ed25519_openssh.pub`
+	if [ "x$exp" != "x$fp" ] ; then
+		fail "incorrect SHA1 SSHFP output"
+	fi
 
-exp="test IN SSHFP 4 2 54a506fb849aafb9f229cf78a94436c281efcb4ae67c8a430e8c06afcb5ee18f"
-fp=`${SSHKEYGEN} -Ohashalg=sha256 -r test -f ${SRC}/ed25519_openssh.pub`
-if [ "x$exp" != "x$fp" ] ; then
-	fail "incorrect SHA256 SSHFP output"
+	exp="test IN SSHFP 4 2 54a506fb849aafb9f229cf78a94436c281efcb4ae67c8a430e8c06afcb5ee18f"
+	fp=`${SSHKEYGEN} -Ohashalg=sha256 -r test -f ${SRC}/ed25519_openssh.pub`
+	if [ "x$exp" != "x$fp" ] ; then
+		fail "incorrect SHA256 SSHFP output"
+	fi
 fi
 
 if ${SSH} -Q key-plain | grep ssh-rsa >/dev/null; then
@@ -44,6 +46,25 @@ if ${SSH} -Q key-plain | grep ssh-rsa >/dev/null; then
 	if [ "$fp" != \
 	    "ff0edf55f1ba959b3eef3f06d5aed04d1e9f172d0b9ccf21c12ab9b3e6379157" ]; then
 		fail "keygen fingerprint sha256"
+	fi
+
+	# Expect two lines of output without an explicit algorithm
+	fp=`${SSHKEYGEN} -r test -f ${SRC}/rsa_openssh.pub | wc -l`
+	if [ $(($fp + 0)) -ne 2 ] ; then
+		fail "incorrect number of SSHFP records $fp (expected 2)"
+	fi
+
+	# Test explicit algorithm selection
+	exp="test IN SSHFP 1 1 c1856031cbdd5e026abf958a5a0e51dcc1fee00b"
+	fp=`${SSHKEYGEN} -Ohashalg=sha1 -r test -f ${SRC}/rsa_openssh.pub`
+	if [ "x$exp" != "x$fp" ] ; then
+		fail "incorrect SHA1 SSHFP output"
+	fi
+
+	exp="test IN SSHFP 1 2 ff0edf55f1ba959b3eef3f06d5aed04d1e9f172d0b9ccf21c12ab9b3e6379157"
+	fp=`${SSHKEYGEN} -Ohashalg=sha256 -r test -f ${SRC}/rsa_openssh.pub`
+	if [ "x$exp" != "x$fp" ] ; then
+		fail "incorrect SHA256 SSHFP output"
 	fi
 fi
 

@@ -178,13 +178,13 @@ struct kex {
 	SSH_DH_KEY *dh;
 	u_int	min, max, nbits;	/* GEX */
 #if WITH_OPENSSL_V3
-	EVP_PKEY *client_pkey;	        /* ECDH */
+	EVP_PKEY *client_pkey;	        /* ECDH, X25519 (non-FIPS disabled) */
 #else
 	EC_KEY	*ec_client_key;         /* ECDH */
 	const EC_GROUP *ec_group;	/* ECDH */
-#endif /* WITH_OPENSSL_V3 */
 	u_char c25519_client_key[CURVE25519_SIZE]; /* 25519 + KEM */
 	u_char c25519_client_pubkey[CURVE25519_SIZE]; /* 25519 */
+#endif
 	u_char sntrup761_client_key[crypto_kem_sntrup761_SECRETKEYBYTES]; /* KEM */
 	struct sshbuf *client_pub;
 };
@@ -257,6 +257,14 @@ int	 kexgex_hash(int, const struct sshbuf *, const struct sshbuf *,
     const BIGNUM *, const u_char *, size_t,
     u_char *, size_t *);
 
+#ifdef ENABLE_NONFIPS
+#if defined(WITH_OPENSSL) && WITH_OPENSSL_V3
+int	kexc25519_keygen(EVP_PKEY **pkeyp, u_char pub[CURVE25519_SIZE]);
+int	kexc25519_shared_key(EVP_PKEY *pkey,
+    const u_char pub[CURVE25519_SIZE], struct sshbuf *out);
+int	kexc25519_shared_key_ext(EVP_PKEY *pkey,
+    const u_char pub[CURVE25519_SIZE], struct sshbuf *out, int raw);
+#else
 void	kexc25519_keygen(u_char key[CURVE25519_SIZE], u_char pub[CURVE25519_SIZE])
 	__attribute__((__bounded__(__minbytes__, 1, CURVE25519_SIZE)))
 	__attribute__((__bounded__(__minbytes__, 2, CURVE25519_SIZE)));
@@ -268,6 +276,8 @@ int	kexc25519_shared_key_ext(const u_char key[CURVE25519_SIZE],
     const u_char pub[CURVE25519_SIZE], struct sshbuf *out, int)
 	__attribute__((__bounded__(__minbytes__, 1, CURVE25519_SIZE)))
 	__attribute__((__bounded__(__minbytes__, 2, CURVE25519_SIZE)));
+#endif /* defined(WITH_OPENSSL) && WITH_OPENSSL_V3 */
+#endif /* ENABLE_NONFIPS */
 
 #if defined(DEBUG_KEX) || defined(DEBUG_KEXDH) || defined(DEBUG_KEXECDH)
 void	dump_digest(const char *, const u_char *, int);

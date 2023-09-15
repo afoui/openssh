@@ -5,9 +5,15 @@ tid="ssh-keygen known_hosts"
 
 rm -f $OBJ/kh.*
 
-# Generate some keys for testing (just ed25519 for speed) and make a hosts file.
+# Generate some keys for testing (just ed25519/ecdsa-sha2-nistp256 for speed) and make a hosts file.
+if ${SSH} -Q key-plain | grep "^ssh-ed25519$" 2>&1 > /dev/null; then
+	keytype=ed25519
+else
+	keytype=ecdsa-sha2-nistp256
+fi
+
 for x in host-a host-b host-c host-d host-e host-f host-a2 host-b2; do
-	${SSHKEYGEN} -qt ed25519 -f $OBJ/kh.$x -C "$x" -N "" || \
+	${SSHKEYGEN} -qt "$keytype" -f $OBJ/kh.$x -C "$x" -N "" || \
 		fatal "ssh-keygen failed"
 	# Add a comment that we expect should be preserved.
 	echo "# $x" >> $OBJ/kh.hosts

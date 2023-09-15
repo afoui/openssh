@@ -12,13 +12,13 @@ sig_namespace="test-$$"
 sig_principal="user-$$@example.com"
 
 # Make a "wrong key"
-${SSHKEYGEN} -q -t ed25519 -f $OBJ/wrong-key \
+${SSHKEYGEN} -q -t $SSH_FAST_KEY_TYPE -f $OBJ/wrong-key \
 	-C "wrong trousers, Grommit" -N '' \
 	|| fatal "couldn't generate key"
 WRONG=$OBJ/wrong-key.pub
 
 # Make a CA key.
-${SSHKEYGEN} -q -t ed25519 -f $OBJ/sigca-key -C "CA" -N '' \
+${SSHKEYGEN} -q -t $SSH_FAST_KEY_TYPE -f $OBJ/sigca-key -C "CA" -N '' \
 	|| fatal "couldn't generate key"
 CA_PRIV=$OBJ/sigca-key
 CA_PUB=$OBJ/sigca-key.pub

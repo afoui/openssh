@@ -128,7 +128,11 @@ input_kex_dh_gex_group(int type, u_int32_t seq, struct ssh *ssh)
 		goto out;
 	debug("SSH2_MSG_KEX_DH_GEX_INIT sent");
 #ifdef DEBUG_KEXDH
+#if WITH_OPENSSL_V3
+	EVP_PKEY_print_params_fp(stderr, kex->dh->params, 8, NULL);
+#else
 	DHparams_print_fp(stderr, kex->dh);
+#endif
 	fprintf(stderr, "pub= ");
 	BN_print_fp(stderr, pub_key);
 	fprintf(stderr, "\n");

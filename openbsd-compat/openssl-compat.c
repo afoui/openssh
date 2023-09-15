@@ -76,6 +76,7 @@ ssh_libcrypto_init(void)
       defined(OPENSSL_INIT_ADD_ALL_DIGESTS)
 	OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS |
 	    OPENSSL_INIT_ADD_ALL_DIGESTS, NULL);
+		// TODO: OPENSSL_INIT_LOAD_CONFIG?
 #elif defined(HAVE_OPENSSL_ADD_ALL_ALGORITHMS)
 	OpenSSL_add_all_algorithms();
 #endif

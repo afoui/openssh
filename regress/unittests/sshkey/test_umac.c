@@ -1,5 +1,7 @@
 #include "includes.h"
 
+#ifdef ENABLE_NONFIPS
+
 #include <string.h>
 
 #include "../test_helper/test_helper.h"
@@ -52,9 +54,12 @@ static const struct umac_test_vector umac_vecs[] = {
 	{/*end*/}
 };
 
+#endif /* ENABLE_NONFIPS */
+
 void
 sshkey_umac_tests(void)
 {
+#ifdef ENABLE_NONFIPS
 	size_t i, j;
 	const struct umac_test_vector *vec;
 	struct umac_ctx *ctx64 = NULL, *ctx128 = NULL;
@@ -90,4 +95,5 @@ sshkey_umac_tests(void)
 	}
 
 	TEST_DONE();
+#endif /* ENABLE_NONFIPS */
 }

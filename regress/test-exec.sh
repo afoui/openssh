@@ -743,6 +743,19 @@ for t in ${SSH_HOSTKEY_TYPES}; do
 done
 chmod 644 $OBJ/authorized_keys_$USER
 
+# Ed25519/ecdsa-sha2-nistp256 chosen for generation speed.
+SSH_FAST_KEY_TYPE=
+for t in ${SSH_KEYTYPES}; do
+	case "$t" in
+		ssh-ed25519) SSH_FAST_KEY_TYPE=ed25519;;
+		ecdsa-sha2-nistp256) : ${SSH_FAST_KEY_TYPE:="$t"};;
+	esac
+done
+
+if [ -z "$SSH_FAST_KEY_TYPE" ]; then
+	fatal "At least one of ed25519, ecdsa-sha2-nistp256 must be supported"
+fi
+
 # Activate Twisted Conch tests if the binary is present
 REGRESS_INTEROP_CONCH=no
 if test -x "$CONCH" ; then

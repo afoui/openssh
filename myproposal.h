@@ -24,6 +24,10 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "config.h"
+
+#ifdef ENABLE_NONFIPS
+
 #define KEX_SERVER_KEX	\
 	"sntrup761x25519-sha512@openssh.com," \
 	"curve25519-sha256," \
@@ -36,7 +40,22 @@
 	"diffie-hellman-group18-sha512," \
 	"diffie-hellman-group14-sha256"
 
+#else
+
+#define KEX_SERVER_KEX	\
+	"ecdh-sha2-nistp256," \
+	"ecdh-sha2-nistp384," \
+	"ecdh-sha2-nistp521," \
+	"diffie-hellman-group-exchange-sha256," \
+	"diffie-hellman-group16-sha512," \
+	"diffie-hellman-group18-sha512," \
+	"diffie-hellman-group14-sha256"
+
+#endif /* ENABLE_NONFIPS */
+
 #define KEX_CLIENT_KEX KEX_SERVER_KEX
+
+#ifdef ENABLE_NONFIPS
 
 #define	KEX_DEFAULT_PK_ALG	\
 	"ssh-ed25519-cert-v01@openssh.com," \
@@ -56,12 +75,42 @@
 	"rsa-sha2-512," \
 	"rsa-sha2-256"
 
+#else
+
+#define	KEX_DEFAULT_PK_ALG	\
+	"ecdsa-sha2-nistp256-cert-v01@openssh.com," \
+	"ecdsa-sha2-nistp384-cert-v01@openssh.com," \
+	"ecdsa-sha2-nistp521-cert-v01@openssh.com," \
+	"sk-ecdsa-sha2-nistp256-cert-v01@openssh.com," \
+	"rsa-sha2-512-cert-v01@openssh.com," \
+	"rsa-sha2-256-cert-v01@openssh.com," \
+	"ecdsa-sha2-nistp256," \
+	"ecdsa-sha2-nistp384," \
+	"ecdsa-sha2-nistp521," \
+	"sk-ecdsa-sha2-nistp256@openssh.com," \
+	"rsa-sha2-512," \
+	"rsa-sha2-256"
+
+#endif /* ENABLE_NONFIPS */
+
+#ifdef ENABLE_NONFIPS
+
 #define	KEX_SERVER_ENCRYPT \
 	"chacha20-poly1305@openssh.com," \
 	"aes128-ctr,aes192-ctr,aes256-ctr," \
 	"aes128-gcm@openssh.com,aes256-gcm@openssh.com"
 
+#else
+
+#define	KEX_SERVER_ENCRYPT \
+	"aes128-ctr,aes192-ctr,aes256-ctr," \
+	"aes128-gcm@openssh.com,aes256-gcm@openssh.com"
+
+#endif /* ENABLE_NONFIPS */
+
 #define KEX_CLIENT_ENCRYPT KEX_SERVER_ENCRYPT
+
+#ifdef ENABLE_NONFIPS
 
 #define	KEX_SERVER_MAC \
 	"umac-64-etm@openssh.com," \
@@ -75,7 +124,21 @@
 	"hmac-sha2-512," \
 	"hmac-sha1"
 
+#else
+
+#define	KEX_SERVER_MAC \
+	"hmac-sha2-256-etm@openssh.com," \
+	"hmac-sha2-512-etm@openssh.com," \
+	"hmac-sha1-etm@openssh.com," \
+	"hmac-sha2-256," \
+	"hmac-sha2-512," \
+	"hmac-sha1"
+
+#endif /* ENABLE_NONFIPS */
+
 #define KEX_CLIENT_MAC KEX_SERVER_MAC
+
+#ifdef ENABLE_NONFIPS
 
 /* Not a KEX value, but here so all the algorithm defaults are together */
 #define	SSH_ALLOWED_CA_SIGALGS	\
@@ -87,6 +150,19 @@
 	"sk-ecdsa-sha2-nistp256@openssh.com," \
 	"rsa-sha2-512," \
 	"rsa-sha2-256"
+
+#else
+
+/* Not a KEX value, but here so all the algorithm defaults are together */
+#define	SSH_ALLOWED_CA_SIGALGS	\
+	"ecdsa-sha2-nistp256," \
+	"ecdsa-sha2-nistp384," \
+	"ecdsa-sha2-nistp521," \
+	"sk-ecdsa-sha2-nistp256@openssh.com," \
+	"rsa-sha2-512," \
+	"rsa-sha2-256"
+
+#endif /* ENABLE_NONFIPS */
 
 #define	KEX_DEFAULT_COMP	"none,zlib@openssh.com"
 #define	KEX_DEFAULT_LANG	""
