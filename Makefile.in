@@ -71,6 +71,7 @@ ENABLE_NONFIPS=@ENABLE_NONFIPS@
 .SUFFIXES: .lo
 
 TARGETS=ssh$(EXEEXT) sshd$(EXEEXT) ssh-add$(EXEEXT) ssh-keygen$(EXEEXT) ssh-keyscan${EXEEXT} ssh-keysign${EXEEXT} ssh-pkcs11-helper$(EXEEXT) ssh-agent$(EXEEXT) scp$(EXEEXT) sftp-server$(EXEEXT) sftp$(EXEEXT) ssh-sk-helper$(EXEEXT)
+TARGETS += run-ptest.config
 
 XMSS_OBJS=\
 	ssh-xmss.o \
@@ -791,5 +792,9 @@ package: $(CONFIGFILES) $(MANPAGES) $(TARGETS)
 	if [ "@MAKE_PACKAGE_SUPPORTED@" = yes ]; then \
 		sh buildpkg.sh; \
 	fi
+
+run-ptest.config:
+	echo "ENABLE_NONFIPS=@ENABLE_NONFIPS@ TEST_SSH_RSA=@TEST_SSH_RSA@ TEST_SSH_ED25519=@TEST_SSH_ED25519@ TEST_SSH_UTF8=@TEST_SSH_UTF8@" > .tmp.$@
+	mv .tmp.$@ $@
 
 # @DEPEND@
